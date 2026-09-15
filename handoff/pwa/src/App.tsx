@@ -1,5 +1,19 @@
-import { useState } from 'react'
-import { AlertTriangle, Check, Copy, HardDriveDownload, Mic, QrCode, RefreshCw, RotateCcw, Settings, Smartphone, Square, Trash2 } from 'lucide-react'
+import { useRef, useState } from 'react'
+import {
+	AlertTriangle,
+	Check,
+	Copy,
+	FolderOpen,
+	HardDriveDownload,
+	Mic,
+	QrCode,
+	RefreshCw,
+	RotateCcw,
+	Settings,
+	Smartphone,
+	Square,
+	Trash2,
+} from 'lucide-react'
 
 import { InstallHint } from '~/components/install-hint'
 import { OutboxCard } from '~/components/outbox-card'
@@ -11,6 +25,7 @@ import { Card, CardContent } from '~/components/ui/card'
 import { Progress } from '~/components/ui/progress'
 import { Spinner } from '~/components/ui/spinner'
 import { basename, truncateId } from '~/lib/handoff'
+import { IMPORT_ACCEPT } from '~/lib/local/import'
 import { languageLabel } from '~/lib/languages'
 import { formatDuration, formatSize } from '~/lib/recorder'
 import { cn } from '~/lib/style'
@@ -40,9 +55,11 @@ export function App() {
 		hasRecording,
 		startRecording,
 		stopRecording,
+		importFile,
 		outbox,
 		persisted,
 		pumpOutbox,
+		retry,
 		discardQueued,
 		engineChoice,
 		onEngineChange,
@@ -59,6 +76,7 @@ export function App() {
 	} = useHandoffSession()
 
 	const [settingsOpen, setSettingsOpen] = useState(false)
+	const fileInput = useRef<HTMLInputElement>(null)
 
 	const unpair = () => {
 		setSettingsOpen(false)
@@ -94,7 +112,11 @@ export function App() {
 	const needsExplicitLang = !!capabilities && !capabilities.languageDetection && !lang
 	// On-device needs none of the desktop's preconditions: the model is fetched
 	// on demand and Whisper detects the language for itself.
-	const ready = deviceMode ? recordable : recordable && modelLoaded && !needsExplicitLang
+	const engineReady = deviceMode ? localAvailable : modelLoaded && !needsExplicitLang
+	const ready = recordable && engineReady
+	// Importing a file needs no microphone, so someone who declined the mic
+	// prompt — or is on a device without one — can still transcribe.
+	const canImport = engineReady
 	const langSummary = lang ? languageLabel(lang) : 'Auto-detect'
 
 	return (
@@ -197,6 +219,33 @@ export function App() {
 				)}
 				<p className="text-sm text-muted-foreground">{recording ? 'Keep this screen open.' : 'Tap to record, tap again to send.'}</p>
 
+				{/*
+					Importing is hidden while recording or busy: the run is sequential,
+					and a second source picked mid-run would be silently dropped by the
+					re-entrancy guard, which reads as the button not working.
+				*/}
+				{!recording && !busy && (
+					<>
+						<input
+							ref={fileInput}
+							type="file"
+							accept={IMPORT_ACCEPT}
+							className="hidden"
+							onChange={(e) => {
+								const file = e.target.files?.[0]
+								// Cleared so picking the same file twice in a row still
+								// fires a change event.
+								e.target.value = ''
+								if (file) void importFile(file)
+							}}
+						/>
+						<Button variant="ghost" className="mt-4 h-11" disabled={!canImport} onClick={() => fileInput.current?.click()}>
+							<FolderOpen />
+							Choose audio or video
+						</Button>
+					</>
+				)}
+
 				{capabilities?.modelLoaded && (
 					<p className="mt-3 text-center text-xs text-muted-foreground">
 						{langSummary}
@@ -261,9 +310,9 @@ export function App() {
 						{(failure || phase === 'done') && (
 							<div className="flex flex-wrap gap-2">
 								{failure && hasRecording && (
-									<Button className="h-12 flex-1" onClick={() => void pumpOutbox()}>
+									<Button className="h-12 flex-1" onClick={() => void retry()}>
 										<RotateCcw />
-										Retry send
+										Retry
 									</Button>
 								)}
 								<Button variant="outline" className="h-12 flex-1" onClick={onDiscard}>

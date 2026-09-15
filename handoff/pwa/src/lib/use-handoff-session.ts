@@ -41,11 +41,27 @@ import { useWakeLock } from '~/lib/use-wake-lock'
 
 import { localEngineAvailable, transcribeLocally } from './local/engine'
 import { findModel, loadEngineChoice, loadModelId, saveEngineChoice, saveModelId, type EngineChoice } from './local/models'
+import { rejectImport } from './local/import'
 
 export type Phase = 'idle' | 'recording' | 'sending' | 'done' | 'failed'
 
 /** Which engine actually ran a given recording, for the UI to label it. */
 export type EngineUsed = 'desktop' | 'device'
+
+/**
+ * What a run transcribes.
+ *
+ * A recording is `queued`: it exists nowhere but this phone until a transcript
+ * comes back, so `outbox.ts` writes it to IndexedDB before the first attempt
+ * and removes it only on a confirmed `done`.
+ *
+ * An imported file is `transient`. The original is still in the user's photo
+ * library or Files, so copying it into IndexedDB would duplicate gigabytes to
+ * protect against losing something that cannot be lost — and would blow the
+ * outbox's deliberately small caps on the first video. If a transient run
+ * fails, the remedy is to pick the file again.
+ */
+type RunSource = { kind: 'queued'; entryId: string } | { kind: 'transient'; blob: Blob; filename: string; mime: string; lang: string | null }
 
 export interface Failure {
 	code: string
@@ -96,6 +112,10 @@ export function useHandoffSession() {
 	const maxBytesRef = useRef(0)
 	const peerRef = useRef<Peer | null>(null)
 	const startedAtRef = useRef(0)
+	// The last thing a run was asked to transcribe. A queued recording can be
+	// retried by draining the outbox, but a transient import has no entry to
+	// drain — without this, its retry button would do nothing at all.
+	const lastSourceRef = useRef<RunSource | null>(null)
 	const engineChoiceRef = useRef<EngineChoice>(engineChoice)
 	const localModelIdRef = useRef(localModelId)
 	const localAvailableRef = useRef(false)
@@ -246,9 +266,10 @@ export function useHandoffSession() {
 		}
 	}, [])
 
-	const send = useCallback(
-		async (entryId: string) => {
+	const run = useCallback(
+		async (source: RunSource) => {
 			if (sendingRef.current) return
+			lastSourceRef.current = source
 			const currentPeer = peerRef.current
 
 			/**
@@ -274,12 +295,32 @@ export function useHandoffSession() {
 			}
 			if (!useDevice && !currentPeer) return
 
-			const entry = await getEntry(entryId)
-			if (!entry) {
-				await refreshOutbox()
-				return
+			// A queued run may find its entry already gone — drained by another
+			// tab, or discarded while it waited. That is not a failure.
+			const queuedId = source.kind === 'queued' ? source.entryId : null
+			let blob: Blob
+			let filename: string
+			let mime: string
+			// The language chosen when the recording was made travels with it, so a
+			// queued recording is not retried under a language picked later.
+			let wireLang: string | null
+
+			if (source.kind === 'queued') {
+				const entry = await getEntry(source.entryId)
+				if (!entry) {
+					await refreshOutbox()
+					return
+				}
+				blob = blobFor(entry)
+				filename = entry.filename
+				mime = entry.mime || blob.type || 'application/octet-stream'
+				wireLang = entry.lang
+			} else {
+				blob = source.blob
+				filename = source.filename
+				mime = source.mime || blob.type || 'application/octet-stream'
+				wireLang = source.lang
 			}
-			const blob = blobFor(entry)
 			blobRef.current = blob
 
 			// Refuse an upload the desktop is going to reject on arrival — no point
@@ -309,15 +350,9 @@ export function useHandoffSession() {
 			setTranscribePct(null)
 			setSavedPath(null)
 			setLoadingModel(false)
-			setActiveId(entryId)
+			setActiveId(queuedId)
 			setPhase('sending')
-			setStatus('Connecting to your desktop…')
-
-			const mime = entry.mime || blob.type || 'application/octet-stream'
-			const filename = entry.filename
-			// The language chosen when the recording was made travels with it, so a
-			// queued recording is not retried under a language picked later.
-			const wireLang = entry.lang
+			setStatus(useDevice ? 'Preparing…' : 'Connecting to your desktop…')
 
 			try {
 				/**
@@ -394,8 +429,9 @@ export function useHandoffSession() {
 						case 'done':
 							release()
 							// Confirmed terminal success: the only point at which the
-							// recording may be dropped from durable storage.
-							void deleteEntry(entryId).then(refreshOutbox)
+							// recording may be dropped from durable storage. A transient
+							// run has nothing stored to drop.
+							if (queuedId) void deleteEntry(queuedId).then(refreshOutbox)
 							setLoadingModel(false)
 							if (typeof event.text === 'string') setTranscript(event.text.trim())
 							if (typeof event.savedPath === 'string' && event.savedPath) setSavedPath(event.savedPath)
@@ -405,7 +441,7 @@ export function useHandoffSession() {
 							break
 						case 'error':
 							release()
-							void markAttempt(entryId, event.message).then(refreshOutbox)
+							if (queuedId) void markAttempt(queuedId, event.message).then(refreshOutbox)
 							setLoadingModel(false)
 							setFailure({
 								code: event.code || 'error',
@@ -430,7 +466,7 @@ export function useHandoffSession() {
 				})
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err)
-				void markAttempt(entryId, message).then(refreshOutbox)
+				if (queuedId) void markAttempt(queuedId, message).then(refreshOutbox)
 				setFailure({ code: 'transport', message })
 				setPhase('failed')
 				setStatus('')
@@ -446,6 +482,55 @@ export function useHandoffSession() {
 		},
 		[refreshOutbox, release, acquire, clearStallTimer],
 	)
+
+	/** Transcribe a queued recording. */
+	const send = useCallback((entryId: string) => run({ kind: 'queued', entryId }), [run])
+
+	/**
+	 * Transcribe a file the user picked from their library or Files.
+	 *
+	 * Runs transiently — see `RunSource`. The language is read at pick time
+	 * rather than travelling with a stored entry, because there is no stored
+	 * entry for it to travel with.
+	 */
+	const importFile = useCallback(
+		async (file: File) => {
+			if (sendingRef.current) return
+
+			// Checked before anything expensive starts, so a file that cannot work
+			// is refused in the moment the user picks it rather than after a wait.
+			setStatus('Checking the file…')
+			const rejection = await rejectImport(file)
+			if (rejection) {
+				setFailure({ code: rejection.code, message: rejection.message })
+				setPhase('failed')
+				setStatus('')
+				return
+			}
+
+			await run({
+				kind: 'transient',
+				blob: file,
+				filename: file.name || 'import',
+				mime: file.type || 'application/octet-stream',
+				lang: langRef.current || null,
+			})
+		},
+		[run],
+	)
+
+	/**
+	 * Retry whatever just failed.
+	 *
+	 * For a queued recording this is the same as draining the outbox; for an
+	 * imported file the outbox is empty and the blob itself is the only handle
+	 * on it, so the source is replayed directly.
+	 */
+	const retry = useCallback(async () => {
+		const last = lastSourceRef.current
+		if (!last) return
+		await run(last)
+	}, [run])
 
 	/**
 	 * Attempt the oldest pending recording. Deliberately sequential and
@@ -753,10 +838,12 @@ export function useHandoffSession() {
 		hasRecording: blobRef.current !== null,
 		startRecording,
 		stopRecording,
+		importFile,
 		// Outbox
 		outbox,
 		persisted,
 		pumpOutbox,
+		retry,
 		discardQueued,
 		// Engine
 		engineChoice,
