@@ -1,0 +1,89 @@
+# Deploy just the phone PWA to this fork's GitHub Pages.
+#
+# Not a replacement for `website.yml`, which builds the whole Vibe site and
+# nests the PWA inside it at `/vibe/phone/`. That job compiles the iroh client
+# from Rust to wasm, which needs a pinned wasm-bindgen, binaryen and a Linux
+# runner; this one fetches the module upstream already published instead
+# (`pnpm wasm`), because nothing in the on-device engine touches that crate.
+#
+# The tradeoff is the same one `scripts/fetch-wasm.mjs` documents: the handoff
+# protocol is pinned to whatever upstream currently has deployed. Change the
+# wire format and this workflow cannot build it — use `website.yml` for that.
+#
+# The PWA is served at the Pages root (`/<repo>/`), not under `/phone/`, so the
+# base below must match the repository name.
+name: Deploy Phone PWA
+
+on:
+    push:
+        branches:
+            - main
+            - offline-on-device
+        paths:
+            - "handoff/pwa/**"
+            - ".github/workflows/phone-pages.yml"
+    workflow_dispatch:
+
+permissions:
+    contents: read
+    pages: write
+    id-token: write
+
+# Never let two deploys race; let an in-flight one finish rather than shipping
+# a half-published site.
+concurrency:
+    group: "pages"
+    cancel-in-progress: false
+
+jobs:
+    build:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: pnpm/action-setup@v4
+              with:
+                  package_json_file: handoff/pwa/package.json
+
+            # 24, not the 22 the other workflows use: the tests import `.ts`
+            # modules directly and rely on Node stripping the types, which is
+            # only on by default from 23.6 onward.
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+
+            - name: install
+              run: pnpm install --frozen-lockfile
+              working-directory: handoff/pwa
+
+            - name: fetch prebuilt handoff wasm
+              run: pnpm wasm
+              working-directory: handoff/pwa
+
+            - name: test
+              run: pnpm test
+              working-directory: handoff/pwa
+
+            - name: build
+              # Pages serves a project site from `/<repo>/`; Vite bakes this into
+              # every asset URL at build time, so it has to be right here.
+              env:
+                  PWA_BASE: /${{ github.event.repository.name }}/
+              run: pnpm build
+              working-directory: handoff/pwa
+
+            - uses: actions/configure-pages@v5
+
+            - uses: actions/upload-pages-artifact@v3
+              with:
+                  path: handoff/pwa/dist
+
+    deploy:
+        needs: build
+        runs-on: ubuntu-latest
+        environment:
+            name: github-pages
+            url: ${{ steps.deployment.outputs.page_url }}
+        steps:
+            - id: deployment
+              uses: actions/deploy-pages@v4
