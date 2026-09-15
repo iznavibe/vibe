@@ -20,6 +20,7 @@
 import { pipeline, WhisperTextStreamer, env, type AutomaticSpeechRecognitionPipeline, type DataType } from '@huggingface/transformers'
 
 import { createProgressTracker } from './progress'
+import type { Backend } from './backend'
 
 /**
  * Whether this repo's files are already in the browser cache.
@@ -52,10 +53,37 @@ type WhisperTokenizerLike = ConstructorParameters<typeof WhisperTextStreamer>[0]
 // transformers.js probe for one on every load and log a 404 for its trouble.
 env.allowLocalModels = false
 
+/**
+ * Serve ONNX Runtime's wasm from this origin, not jsDelivr.
+ *
+ * Left unset, transformers.js points `wasmPaths` at
+ * `cdn.jsdelivr.net/npm/onnxruntime-web@<version>/dist/`. The service worker
+ * only caches same-origin requests, so the runtime would come off the network
+ * on every cold start and on-device transcription would fail in exactly the
+ * situation it exists for. `scripts/copy-ort.mjs` puts these in `public/ort/`.
+ *
+ * Which binary matters: the asyncify build carries JSEP, ORT's WebGPU
+ * execution provider, and the plain one does not. They are not interchangeable
+ * — asking for a `webgpu` session against the plain binary fails — so the file
+ * is chosen from the backend, in one place, rather than inferred twice.
+ */
+function configureOrtPaths(backend: Backend) {
+	// Resolved against the deploy base, NOT `self.location`: this module is
+	// served from `assets/worker-<hash>.js`, so resolving relatively would look
+	// for `assets/ort/...` and 404. BASE_URL is `/` in dev and `/vibe/` on
+	// Pages, and always carries its trailing slash.
+	const base = new URL(`${import.meta.env.BASE_URL}ort/`, self.location.origin).href
+	const stem = backend === 'webgpu' ? 'ort-wasm-simd-threaded.asyncify' : 'ort-wasm-simd-threaded'
+	const wasm = env.backends?.onnx?.wasm
+	if (!wasm) return
+	wasm.wasmPaths = { mjs: `${base}${stem}.mjs`, wasm: `${base}${stem}.wasm` }
+}
+
 export interface TranscribeRequest {
 	type: 'transcribe'
 	id: string
 	repo: string
+	backend: Backend
 	dtype: Record<string, DataType>
 	/** ISO code, or null to let Whisper detect it. */
 	lang: string | null
@@ -67,6 +95,7 @@ export interface PreloadRequest {
 	type: 'preload'
 	id: string
 	repo: string
+	backend: Backend
 	dtype: Record<string, DataType>
 }
 
@@ -108,8 +137,8 @@ let loaded: { key: string; pipe: AutomaticSpeechRecognitionPipeline } | null = n
 /** Track bytes per file so the reported percentage is over the whole download. */
 type FileProgress = { loaded: number; total: number }
 
-async function getPipeline(id: string, repo: string, dtype: Record<string, DataType>): Promise<AutomaticSpeechRecognitionPipeline> {
-	const key = `${repo}:${JSON.stringify(dtype)}`
+async function getPipeline(id: string, repo: string, backend: Backend, dtype: Record<string, DataType>): Promise<AutomaticSpeechRecognitionPipeline> {
+	const key = `${repo}:${backend}:${JSON.stringify(dtype)}`
 	if (loaded?.key === key) return loaded.pipe
 
 	if (loaded) {
@@ -122,6 +151,8 @@ async function getPipeline(id: string, repo: string, dtype: Record<string, DataT
 		loaded = null
 	}
 
+	configureOrtPaths(backend)
+
 	const files = new Map<string, FileProgress>()
 
 	// Asked once, before loading starts: mid-load the cache is being written to,
@@ -129,7 +160,9 @@ async function getPipeline(id: string, repo: string, dtype: Record<string, DataT
 	const cached = await isRepoCached(repo)
 
 	const pipe = (await pipeline('automatic-speech-recognition', repo, {
-		device: 'webgpu',
+		// Never hardcoded to webgpu — see backend.ts. On WebKit that path kills
+		// the process outright.
+		device: backend,
 		dtype,
 		progress_callback: (event: unknown) => {
 			const e = event as { status?: string; file?: string; loaded?: number; total?: number }
@@ -160,7 +193,7 @@ async function getPipeline(id: string, repo: string, dtype: Record<string, DataT
 }
 
 async function transcribe(req: TranscribeRequest) {
-	const pipe = await getPipeline(req.id, req.repo, req.dtype)
+	const pipe = await getPipeline(req.id, req.repo, req.backend, req.dtype)
 	post({ type: 'ready', id: req.id })
 
 	const startedAt = performance.now()
@@ -214,7 +247,7 @@ ctx.onmessage = async (event: MessageEvent<WorkerRequest>) => {
 	const req = event.data
 	try {
 		if (req.type === 'preload') {
-			await getPipeline(req.id, req.repo, req.dtype)
+			await getPipeline(req.id, req.repo, req.backend, req.dtype)
 			post({ type: 'ready', id: req.id })
 			return
 		}

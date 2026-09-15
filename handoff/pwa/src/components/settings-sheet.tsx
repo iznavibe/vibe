@@ -4,7 +4,8 @@ import { Check, Download, Link2Off, Trash2, X } from 'lucide-react'
 import { Button } from '~/components/ui/button'
 import { LanguagePicker } from '~/components/language-picker'
 import { truncateId, type Capabilities } from '~/lib/handoff'
-import { LOCAL_MODELS, evictModel, isModelCached, type EngineChoice, type LocalModel } from '~/lib/local/models'
+import { LOCAL_MODELS, evictModel, isModelCached, modelsFor, variantFor, type EngineChoice, type LocalModel } from '~/lib/local/models'
+import type { Backend } from '~/lib/local/backend'
 import { localCapabilities } from '~/lib/local/capabilities'
 import { formatSize } from '~/lib/recorder'
 import { cn } from '~/lib/style'
@@ -22,7 +23,7 @@ const ENGINE_OPTIONS: { value: EngineChoice; label: string; hint: string }[] = [
  * "already downloaded", never "will definitely re-download" — so a miss shows
  * the download size rather than a promise about what happens next.
  */
-function ModelRow({ model, selected, onSelect }: { model: LocalModel; selected: boolean; onSelect: () => void }) {
+function ModelRow({ model, backend, selected, onSelect }: { model: LocalModel; backend: Backend; selected: boolean; onSelect: () => void }) {
 	const [cached, setCached] = useState<boolean | null>(null)
 
 	const refresh = () => {
@@ -49,7 +50,7 @@ function ModelRow({ model, selected, onSelect }: { model: LocalModel; selected: 
 					) : (
 						<span className="inline-flex items-center gap-1">
 							<Download className="size-3" />
-							{formatSize(model.approxBytes)}
+							{formatSize(variantFor(model, backend)?.approxBytes ?? 0)}
 						</span>
 					)}
 				</span>
@@ -102,6 +103,8 @@ interface Props {
 	localModelId: string
 	onLocalModelChange: (id: string) => void
 	localAvailable: boolean
+	/** Which ORT backend this browser will use; decides the model list. */
+	backend: Backend
 	onUnpair: () => void
 	onClose: () => void
 }
@@ -117,6 +120,7 @@ export function SettingsSheet({
 	localModelId,
 	onLocalModelChange,
 	localAvailable,
+	backend,
 	onUnpair,
 	onClose,
 }: Props) {
@@ -194,8 +198,25 @@ export function SettingsSheet({
 
 					{localAvailable && engineChoice !== 'desktop' && (
 						<SettingsGroup title="On-device model">
-							{LOCAL_MODELS.map((model) => (
-								<ModelRow key={model.id} model={model} selected={model.id === localModelId} onSelect={() => onLocalModelChange(model.id)} />
+							{modelsFor(backend).map((model) => (
+								<ModelRow
+									key={model.id}
+									model={model}
+									backend={backend}
+									selected={model.id === localModelId}
+									onSelect={() => onLocalModelChange(model.id)}
+								/>
+							))}
+							{/*
+								A model this backend cannot run is listed but not offered:
+								dropping it silently reads as a missing feature, and the
+								reason is worth stating once.
+							*/}
+							{LOCAL_MODELS.filter((m) => !m.variants[backend]).map((model) => (
+								<div key={model.id} className="px-4 py-3 opacity-60">
+									<span className="text-sm font-medium">{model.label}</span>
+									<span className="mt-0.5 block text-xs text-muted-foreground">{model.note}</span>
+								</div>
 							))}
 							<p className="px-4 py-2.5 text-xs text-muted-foreground">
 								Downloaded once over the network, then kept for offline use. Add this app to your Home Screen first — Safari clears storage for

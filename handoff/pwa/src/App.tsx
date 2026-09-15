@@ -70,6 +70,7 @@ export function App() {
 		localModelId,
 		onLocalModelChange,
 		localAvailable,
+		backend,
 		engineUsed,
 		lang,
 		onLangChange,
@@ -176,15 +177,15 @@ export function App() {
 							doing it.
 						</p>
 						<div className="flex flex-wrap gap-2">
-							{smallerThan(crashed) && (
+							{smallerThan(crashed, backend) && (
 								<Button
 									className="h-12 flex-1"
 									onClick={() => {
-										const next = smallerThan(crashed)
+										const next = smallerThan(crashed, backend)
 										if (next) onLocalModelChange(next.id)
 										setCrashed(null)
 									}}>
-									Switch to {smallerThan(crashed)?.label}
+									Switch to {smallerThan(crashed, backend)?.label}
 								</Button>
 							)}
 							<Button variant="outline" className="h-12 flex-1" onClick={() => setCrashed(null)}>
@@ -407,6 +408,7 @@ export function App() {
 				localModelId={localModelId}
 				onLocalModelChange={onLocalModelChange}
 				localAvailable={localAvailable}
+				backend={backend}
 				onUnpair={unpair}
 				onClose={() => setSettingsOpen(false)}
 			/>

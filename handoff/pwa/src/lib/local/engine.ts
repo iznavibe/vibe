@@ -15,8 +15,9 @@
 
 import type { HandoffEvent } from '../handoff'
 import { decodeToPcm, durationOf } from './audio'
-import type { LocalModel } from './models'
+import { variantFor, type LocalModel } from './models'
 import { markLoadFinished, markLoadStarted } from './crash'
+import { pickBackend } from './backend'
 import type { WorkerReply, WorkerRequest } from './worker'
 
 export interface LocalRunOptions {
@@ -60,18 +61,17 @@ function nextId(): string {
 	return `local-${counter}`
 }
 
-/** Whether this browser can run the on-device engine at all. */
+/**
+ * Whether this browser can run the on-device engine at all.
+ *
+ * This used to require WebGPU, which was wrong twice over: it shut the feature
+ * off entirely on every iPhone below iOS 26, and it promised the fast path on
+ * WebKit where that path is precisely what crashes. The WASM backend needs
+ * nothing but a worker, so the honest answer is now almost always yes — slow
+ * on some devices, absent on none.
+ */
 export async function localEngineAvailable(): Promise<boolean> {
-	if (typeof Worker === 'undefined') return false
-	const gpu = (navigator as { gpu?: { requestAdapter(): Promise<unknown> } }).gpu
-	if (!gpu) return false
-	try {
-		// Presence of `navigator.gpu` is not the same as a usable adapter: a
-		// browser can expose the API and still fail to hand one over.
-		return (await gpu.requestAdapter()) !== null
-	} catch {
-		return false
-	}
+	return typeof Worker !== 'undefined' && typeof WebAssembly !== 'undefined'
 }
 
 /**
@@ -167,11 +167,20 @@ export function transcribeLocally(opts: LocalRunOptions): ReadableStream<Handoff
 				// nothing below runs, and this breadcrumb is the only evidence left.
 				markLoadStarted(opts.model.id)
 
+				const backend = await pickBackend()
+				const variant = variantFor(opts.model, backend)
+				if (!variant) {
+					throw new Error(
+						`${opts.model.label} cannot run on this browser's backend. Choose a smaller model in settings, or send this to your desktop.`,
+					)
+				}
+
 				const request: WorkerRequest = {
 					type: 'transcribe',
 					id,
 					repo: opts.model.repo,
-					dtype: opts.model.dtype,
+					backend,
+					dtype: variant.dtype,
 					lang: opts.lang,
 					pcm,
 					durationSec: durationOf(pcm),

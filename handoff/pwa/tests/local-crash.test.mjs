@@ -59,16 +59,42 @@ test('corrupt or unknown breadcrumbs are ignored, not thrown on', () => {
 })
 
 test('stepping down lands on the next smallest model', () => {
-	assert.equal(smallerThan(findModel('large-v3-turbo'))?.id, 'small')
-	assert.equal(smallerThan(findModel('small'))?.id, 'base')
+	assert.equal(smallerThan(findModel('large-v3-turbo'), 'webgpu')?.id, 'small')
+	assert.equal(smallerThan(findModel('small'), 'webgpu')?.id, 'base')
 })
 
 test('the smallest model suggests nothing — there is nothing smaller to offer', () => {
-	assert.equal(smallerThan(LOCAL_MODELS[0]), null)
+	assert.equal(smallerThan(LOCAL_MODELS[0], 'webgpu'), null)
 })
 
-test('models are ordered smallest first, which smallerThan depends on', () => {
-	for (let i = 1; i < LOCAL_MODELS.length; i += 1) {
-		assert.ok(LOCAL_MODELS[i].approxBytes > LOCAL_MODELS[i - 1].approxBytes, `${LOCAL_MODELS[i].id} is not larger than ${LOCAL_MODELS[i - 1].id}`)
+test('a step-down never suggests a model the backend cannot run', () => {
+	// Turbo has no CPU variant. Suggesting it on the wasm backend would send
+	// the user off to download most of a gigabyte that cannot then run.
+	for (const model of LOCAL_MODELS) {
+		const next = smallerThan(model, 'wasm')
+		if (next) assert.ok(next.variants.wasm, `${next.id} has no wasm variant but was suggested`)
+	}
+})
+
+test('a saved model the backend cannot run steps down to one it can', () => {
+	// Turbo picked on a WebGPU browser, then opened in Safari.
+	assert.equal(smallerThan(findModel('large-v3-turbo'), 'wasm')?.id, 'small')
+})
+
+test('each backend lists its models smallest first, which smallerThan depends on', () => {
+	for (const backend of ['webgpu', 'wasm']) {
+		const list = LOCAL_MODELS.filter((m) => m.variants[backend])
+		for (let i = 1; i < list.length; i += 1) {
+			assert.ok(
+				list[i].variants[backend].approxBytes > list[i - 1].variants[backend].approxBytes,
+				`${list[i].id} is not larger than ${list[i - 1].id} on ${backend}`,
+			)
+		}
+	}
+})
+
+test('every model can run on at least one backend', () => {
+	for (const m of LOCAL_MODELS) {
+		assert.ok(m.variants.webgpu || m.variants.wasm, `${m.id} is listed but runs nowhere`)
 	}
 })

@@ -40,7 +40,8 @@ import {
 import { useWakeLock } from '~/lib/use-wake-lock'
 
 import { localEngineAvailable, transcribeLocally } from './local/engine'
-import { findModel, loadEngineChoice, loadModelId, saveEngineChoice, saveModelId, type EngineChoice } from './local/models'
+import { pickBackend, type Backend } from './local/backend'
+import { findModel, loadEngineChoice, loadModelId, saveEngineChoice, saveModelId, smallerThan, variantFor, type EngineChoice } from './local/models'
 import { rejectImport } from './local/import'
 
 export type Phase = 'idle' | 'recording' | 'sending' | 'done' | 'failed'
@@ -98,6 +99,9 @@ export function useHandoffSession() {
 	const [engineChoice, setEngineChoice] = useState<EngineChoice>(() => loadEngineChoice())
 	const [localModelId, setLocalModelId] = useState<string>(() => loadModelId())
 	const [localAvailable, setLocalAvailable] = useState(false)
+	// Which ORT backend this browser gets. Decides both the model list and the
+	// quantisation, so the UI needs it, not just the engine.
+	const [backend, setBackend] = useState<Backend>('wasm')
 	const [engineUsed, setEngineUsed] = useState<EngineUsed | null>(null)
 	// Durable queue of recordings that the desktop has not confirmed yet.
 	const [outbox, setOutbox] = useState<OutboxSummary[]>([])
@@ -143,11 +147,31 @@ export function useHandoffSession() {
 	localModelIdRef.current = localModelId
 	localAvailableRef.current = localAvailable
 
-	// WebGPU support is a fact about the browser, so probe it once.
+	// Both are facts about the browser, so probe them once.
 	useEffect(() => {
 		let cancelled = false
 		void localEngineAvailable().then((ok) => {
 			if (!cancelled) setLocalAvailable(ok)
+		})
+		void pickBackend().then((picked) => {
+			if (cancelled) return
+			setBackend(picked)
+
+			/*
+				A saved choice can be one this backend cannot run — either because
+				the user picked it on another browser, or because it was offered
+				before the backend was chosen correctly at all. Left alone it fails
+				at transcribe time, long after the moment it could be explained. So
+				it is corrected here, to the largest model this backend can run.
+			*/
+			const saved = findModel(loadModelId())
+			if (saved && !variantFor(saved, picked)) {
+				const replacement = smallerThan(saved, picked)
+				if (replacement) {
+					setLocalModelId(replacement.id)
+					saveModelId(replacement.id)
+				}
+			}
 		})
 		return () => {
 			cancelled = true
@@ -884,6 +908,7 @@ export function useHandoffSession() {
 		localModelId,
 		onLocalModelChange,
 		localAvailable,
+		backend,
 		engineUsed,
 		// Language
 		lang,
