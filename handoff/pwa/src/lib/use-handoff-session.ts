@@ -39,7 +39,13 @@ import {
 } from '~/lib/outbox'
 import { useWakeLock } from '~/lib/use-wake-lock'
 
+import { localEngineAvailable, transcribeLocally } from './local/engine'
+import { findModel, loadEngineChoice, loadModelId, saveEngineChoice, saveModelId, type EngineChoice } from './local/models'
+
 export type Phase = 'idle' | 'recording' | 'sending' | 'done' | 'failed'
+
+/** Which engine actually ran a given recording, for the UI to label it. */
+export type EngineUsed = 'desktop' | 'device'
 
 export interface Failure {
 	code: string
@@ -63,6 +69,13 @@ export function useHandoffSession() {
 	const [savedPath, setSavedPath] = useState<string | null>(null)
 	const [sizeWarning, setSizeWarning] = useState(false)
 	const [loadingModel, setLoadingModel] = useState(false)
+
+	// Engine selection. `auto` prefers the paired desktop and falls back to the
+	// device; the explicit choices never cross over.
+	const [engineChoice, setEngineChoice] = useState<EngineChoice>(() => loadEngineChoice())
+	const [localModelId, setLocalModelId] = useState<string>(() => loadModelId())
+	const [localAvailable, setLocalAvailable] = useState(false)
+	const [engineUsed, setEngineUsed] = useState<EngineUsed | null>(null)
 	// Durable queue of recordings that the desktop has not confirmed yet.
 	const [outbox, setOutbox] = useState<OutboxSummary[]>([])
 	const [persisted, setPersisted] = useState(true)
@@ -83,6 +96,9 @@ export function useHandoffSession() {
 	const maxBytesRef = useRef(0)
 	const peerRef = useRef<Peer | null>(null)
 	const startedAtRef = useRef(0)
+	const engineChoiceRef = useRef<EngineChoice>(engineChoice)
+	const localModelIdRef = useRef(localModelId)
+	const localAvailableRef = useRef(false)
 	// Last time the desktop said anything, used to notice a dropped relay.
 	const lastEventAtRef = useRef(0)
 	const stallTimerRef = useRef<number | null>(null)
@@ -93,6 +109,23 @@ export function useHandoffSession() {
 	langRef.current = lang
 	peerRef.current = peer
 	maxBytesRef.current = capabilities?.maxAudioBytes ?? 0
+
+	// Refs mirror the engine state so `send` can read the current choice without
+	// being rebuilt (and re-registering its effects) every time it changes.
+	engineChoiceRef.current = engineChoice
+	localModelIdRef.current = localModelId
+	localAvailableRef.current = localAvailable
+
+	// WebGPU support is a fact about the browser, so probe it once.
+	useEffect(() => {
+		let cancelled = false
+		void localEngineAvailable().then((ok) => {
+			if (!cancelled) setLocalAvailable(ok)
+		})
+		return () => {
+			cancelled = true
+		}
+	}, [])
 
 	const secure = typeof window !== 'undefined' && window.isSecureContext
 	const recordable = canRecord()
@@ -215,8 +248,31 @@ export function useHandoffSession() {
 
 	const send = useCallback(
 		async (entryId: string) => {
+			if (sendingRef.current) return
 			const currentPeer = peerRef.current
-			if (!currentPeer || sendingRef.current) return
+
+			/**
+			 * Which engine runs this recording.
+			 *
+			 * `auto` is not "whichever is faster" — it is "the desktop if there is
+			 * one to ask". The desktop runs a larger model against GGML and is the
+			 * better answer whenever it is reachable; the device is the fallback
+			 * that makes the app work on a plane. An explicit choice is honoured
+			 * even when it is the worse one.
+			 */
+			const choice = engineChoiceRef.current
+			const canDevice = localAvailableRef.current
+			const useDevice = choice === 'device' || (choice === 'auto' && !currentPeer && canDevice)
+
+			if (useDevice && !canDevice) {
+				setFailure({
+					code: 'no_webgpu',
+					message: 'This browser cannot run transcription on the device. Pair a desktop, or open the app in Safari on iOS 26 or later.',
+				})
+				setPhase('failed')
+				return
+			}
+			if (!useDevice && !currentPeer) return
 
 			const entry = await getEntry(entryId)
 			if (!entry) {
@@ -228,7 +284,7 @@ export function useHandoffSession() {
 
 			// Refuse an upload the desktop is going to reject on arrival — no point
 			// burning cellular data on it. A missing or zero cap means "unknown".
-			const cap = maxBytesRef.current
+			const cap = useDevice ? 0 : maxBytesRef.current
 			if (cap > 0 && blob.size > cap) {
 				release()
 				setFailure({
@@ -264,12 +320,27 @@ export function useHandoffSession() {
 			const wireLang = entry.lang
 
 			try {
-				const client = await getClient()
-				const bytes = new Uint8Array(await blob.arrayBuffer())
-				const authorized = await resolvePeer(client, currentPeer)
-				setStatus(`Sending ${formatSize(bytes.length)}…`)
-
-				const stream = client.send_recording(authorized.endpointId, authorized.token, filename, mime, wireLang, false, bytes)
+				/**
+				 * Both engines produce the same `HandoffEvent` stream, so everything
+				 * below this point is identical whether the work happens on the
+				 * desktop or in a worker on this phone.
+				 */
+				let stream: ReadableStream
+				if (useDevice) {
+					const model = findModel(localModelIdRef.current)
+					if (!model) throw new Error('No on-device model is selected.')
+					setEngineUsed('device')
+					setUploadPct(null)
+					setStatus('Preparing audio on this device…')
+					stream = transcribeLocally({ blob, lang: wireLang, model })
+				} else {
+					const client = await getClient()
+					const bytes = new Uint8Array(await blob.arrayBuffer())
+					const authorized = await resolvePeer(client, currentPeer!)
+					setEngineUsed('desktop')
+					setStatus(`Sending ${formatSize(bytes.length)}…`)
+					stream = client.send_recording(authorized.endpointId, authorized.token, filename, mime, wireLang, false, bytes)
+				}
 				const reader = stream.getReader()
 
 				for (;;) {
@@ -296,10 +367,16 @@ export function useHandoffSession() {
 							// Loading a large model into Server takes tens of seconds and reports
 							// no percentage, so show an indeterminate bar rather than a 0% one
 							// that reads as a stall. Unknown phases are ignored on purpose.
-							if (event.phase === 'loading_model') {
+							if (event.phase === 'decoding') {
+								// Local only: Web Audio is converting the recording to the
+								// 16 kHz mono PCM Whisper needs, before any model runs.
+								setLoadingModel(false)
+								setTranscribePct(null)
+								setStatus('Decoding audio…')
+							} else if (event.phase === 'loading_model') {
 								setLoadingModel(true)
 								setTranscribePct(null)
-								setStatus('Loading model on your desktop…')
+								setStatus(useDevice ? 'Downloading model to this device…' : 'Loading model on your desktop…')
 							} else if (event.phase === 'transcribing') {
 								setLoadingModel(false)
 								setTranscribePct((current) => current ?? 0)
@@ -330,7 +407,10 @@ export function useHandoffSession() {
 							release()
 							void markAttempt(entryId, event.message).then(refreshOutbox)
 							setLoadingModel(false)
-							setFailure({ code: event.code || 'error', message: event.message || 'The desktop reported an error.' })
+							setFailure({
+								code: event.code || 'error',
+								message: event.message || (useDevice ? 'On-device transcription failed.' : 'The desktop reported an error.'),
+							})
 							setPhase('failed')
 							setStatus('')
 							break
@@ -342,7 +422,10 @@ export function useHandoffSession() {
 				// Stream ended without a terminal event.
 				setPhase((current) => {
 					if (current !== 'sending') return current
-					setFailure({ code: 'incomplete', message: 'The desktop closed the connection before finishing.' })
+					setFailure({
+						code: 'incomplete',
+						message: useDevice ? 'The on-device engine stopped before finishing.' : 'The desktop closed the connection before finishing.',
+					})
 					return 'failed'
 				})
 			} catch (err) {
@@ -376,7 +459,11 @@ export function useHandoffSession() {
 	 */
 	const pumpOutbox = useCallback(async () => {
 		if (sendingRef.current || recorderRef.current) return
-		if (!peerRef.current) return
+		// A device-mode run needs no desktop, so the peer is only required when
+		// the desktop is the engine that would actually do the work.
+		const choice = engineChoiceRef.current
+		const deviceCapable = localAvailableRef.current && choice !== 'desktop'
+		if (!peerRef.current && !deviceCapable) return
 		try {
 			const entries = await listOutbox()
 			if (entries.length === 0) return
@@ -621,6 +708,16 @@ export function useHandoffSession() {
 		}
 	}, [])
 
+	const onEngineChange = useCallback((choice: EngineChoice) => {
+		setEngineChoice(choice)
+		saveEngineChoice(choice)
+	}, [])
+
+	const onLocalModelChange = useCallback((id: string) => {
+		setLocalModelId(id)
+		saveModelId(id)
+	}, [])
+
 	/** Drop a queued recording the user does not want to send. */
 	const discardQueued = useCallback(
 		(id: string) => {
@@ -661,6 +758,13 @@ export function useHandoffSession() {
 		persisted,
 		pumpOutbox,
 		discardQueued,
+		// Engine
+		engineChoice,
+		onEngineChange,
+		localModelId,
+		onLocalModelChange,
+		localAvailable,
+		engineUsed,
 		// Language
 		lang,
 		onLangChange,

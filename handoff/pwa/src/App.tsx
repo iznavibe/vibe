@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { AlertTriangle, Check, Copy, HardDriveDownload, Mic, QrCode, RefreshCw, RotateCcw, Settings, Square, Trash2 } from 'lucide-react'
+import { AlertTriangle, Check, Copy, HardDriveDownload, Mic, QrCode, RefreshCw, RotateCcw, Settings, Smartphone, Square, Trash2 } from 'lucide-react'
 
 import { InstallHint } from '~/components/install-hint'
 import { OutboxCard } from '~/components/outbox-card'
@@ -44,6 +44,12 @@ export function App() {
 		persisted,
 		pumpOutbox,
 		discardQueued,
+		engineChoice,
+		onEngineChange,
+		localModelId,
+		onLocalModelChange,
+		localAvailable,
+		engineUsed,
 		lang,
 		onLangChange,
 		copied,
@@ -59,8 +65,24 @@ export function App() {
 		onUnpair()
 	}
 
+	/**
+	 * Whether this run will happen here rather than on a desktop. Mirrors the
+	 * rule in `useHandoffSession.send`; the two must agree or the UI will gate
+	 * on a desktop that is never going to be asked.
+	 */
+	const deviceMode = engineChoice === 'device' || (engineChoice === 'auto' && !peer && localAvailable)
+
 	if (!secure) return <Shell>{<InsecureNotice />}</Shell>
-	if (!peer) return <Shell>{<UnpairedNotice />}</Shell>
+	/*
+		Pairing stays the default first run even on a phone that could transcribe
+		by itself: the desktop is the better engine, and on-device costs a several
+		hundred megabyte download that nobody should trigger by accident. So an
+		unpaired phone is shown the QR instructions until it explicitly opts in,
+		and only a deliberate `device` choice skips them.
+	*/
+	if (!peer && engineChoice !== 'device') {
+		return <Shell>{<UnpairedNotice canRunLocally={localAvailable} onUseDevice={() => onEngineChange('device')} />}</Shell>
+	}
 
 	const recording = phase === 'recording'
 	const busy = phase === 'sending'
@@ -70,7 +92,9 @@ export function App() {
 	const modelLoaded = capabilities?.modelLoaded ?? false
 	const maxBytes = capabilities?.maxAudioBytes ?? 0
 	const needsExplicitLang = !!capabilities && !capabilities.languageDetection && !lang
-	const ready = recordable && modelLoaded && !needsExplicitLang
+	// On-device needs none of the desktop's preconditions: the model is fetched
+	// on demand and Whisper detects the language for itself.
+	const ready = deviceMode ? recordable : recordable && modelLoaded && !needsExplicitLang
 	const langSummary = lang ? languageLabel(lang) : 'Auto-detect'
 
 	return (
@@ -78,7 +102,7 @@ export function App() {
 			onSettings={() => setSettingsOpen(true)}
 			badge={
 				<Badge variant="secondary" className="font-mono text-[10px] font-normal">
-					{truncateId(peer.endpointId)}
+					{peer ? truncateId(peer.endpointId) : 'on device'}
 				</Badge>
 			}>
 			{!recordable && (
@@ -98,7 +122,7 @@ export function App() {
 				</Card>
 			)}
 
-			{!capabilitiesLoading && capabilitiesError && (
+			{peer && !capabilitiesLoading && capabilitiesError && (
 				<Card className="stagger-in mb-4 border-destructive/40">
 					<CardContent className="space-y-3 pt-6">
 						<div className="flex items-center gap-2 text-destructive">
@@ -116,7 +140,7 @@ export function App() {
 								</Button>
 							</>
 						) : (
-							<Button variant="outline" className="h-12 w-full" onClick={() => void refreshCapabilities(peer)}>
+							<Button variant="outline" className="h-12 w-full" onClick={() => peer && void refreshCapabilities(peer)}>
 								<RefreshCw />
 								Try again
 							</Button>
@@ -125,14 +149,12 @@ export function App() {
 				</Card>
 			)}
 
-			{!capabilitiesLoading && capabilities && !capabilities.modelLoaded && (
+			{peer && !capabilitiesLoading && capabilities && !capabilities.modelLoaded && (
 				<Card className="stagger-in mb-4">
 					<CardContent className="space-y-3 pt-6">
 						<h2 className="text-base font-semibold">No model loaded</h2>
-						<p className="text-sm text-muted-foreground">
-							Load a model in Vibe on your desktop, then re-check. Recording is disabled until then.
-						</p>
-						<Button variant="outline" className="h-12 w-full" onClick={() => void refreshCapabilities(peer)}>
+						<p className="text-sm text-muted-foreground">Load a model in Vibe on your desktop, then re-check. Recording is disabled until then.</p>
+						<Button variant="outline" className="h-12 w-full" onClick={() => peer && void refreshCapabilities(peer)}>
 							<RefreshCw />
 							Re-check
 						</Button>
@@ -143,9 +165,7 @@ export function App() {
 			{needsExplicitLang && (
 				<Card className="stagger-in mb-4">
 					<CardContent className="space-y-3 pt-6">
-						<p className="text-sm text-muted-foreground">
-							This model cannot detect the spoken language. Choose one before recording.
-						</p>
+						<p className="text-sm text-muted-foreground">This model cannot detect the spoken language. Choose one before recording.</p>
 						<Button variant="outline" className="h-12 w-full" onClick={() => setSettingsOpen(true)}>
 							Choose a language
 						</Button>
@@ -153,14 +173,7 @@ export function App() {
 				</Card>
 			)}
 
-			<OutboxCard
-				entries={outbox}
-				activeId={activeId}
-				busy={busy}
-				persisted={persisted}
-				onSendNow={() => void pumpOutbox()}
-				onDelete={discardQueued}
-			/>
+			<OutboxCard entries={outbox} activeId={activeId} busy={busy} persisted={persisted} onSendNow={() => void pumpOutbox()} onDelete={discardQueued} />
 
 			<div className="flex flex-col items-center py-8">
 				<button
@@ -170,7 +183,7 @@ export function App() {
 					aria-label={recording ? 'Stop recording' : 'Start recording'}
 					className={cn(
 						'flex size-44 flex-col items-center justify-center gap-3 rounded-full text-lg font-semibold shadow-lg transition-transform duration-150 active:scale-[0.97] disabled:opacity-50',
-						recording ? 'record-pulse bg-destructive text-destructive-foreground' : 'bg-primary text-primary-foreground'
+						recording ? 'record-pulse bg-destructive text-destructive-foreground' : 'bg-primary text-primary-foreground',
 					)}>
 					{recording ? <Square className="size-9 fill-current" /> : <Mic className="size-10" />}
 					<span>{recording ? 'Stop' : 'Record'}</span>
@@ -223,6 +236,19 @@ export function App() {
 							</div>
 						)}
 
+						{/*
+							Which engine produced this. Not decoration: the desktop runs a
+							larger model through a different runtime, so two transcripts of
+							the same audio can differ, and the user should be able to tell
+							which one they are reading before they go looking for a bug.
+						*/}
+						{phase === 'done' && engineUsed === 'device' && (
+							<div className="flex items-start gap-2 text-xs text-muted-foreground">
+								<Smartphone className="mt-0.5 size-3.5 shrink-0" />
+								<span>Transcribed on this phone. Your desktop would use a larger model.</span>
+							</div>
+						)}
+
 						{phase === 'done' && savedPath && (
 							<div className="flex items-start gap-2 text-xs text-muted-foreground">
 								<HardDriveDownload className="mt-0.5 size-3.5 shrink-0" />
@@ -269,10 +295,15 @@ export function App() {
 
 			<SettingsSheet
 				open={settingsOpen}
-				endpointId={peer.endpointId}
+				endpointId={peer?.endpointId ?? null}
 				capabilities={capabilities}
 				lang={lang}
 				onLangChange={onLangChange}
+				engineChoice={engineChoice}
+				onEngineChange={onEngineChange}
+				localModelId={localModelId}
+				onLocalModelChange={onLocalModelChange}
+				localAvailable={localAvailable}
 				onUnpair={unpair}
 				onClose={() => setSettingsOpen(false)}
 			/>
@@ -329,7 +360,7 @@ function Shell({ children, onSettings, badge }: { children: React.ReactNode; onS
 	)
 }
 
-function UnpairedNotice() {
+function UnpairedNotice({ canRunLocally, onUseDevice }: { canRunLocally: boolean; onUseDevice: () => void }) {
 	return (
 		<div className="mt-10 space-y-4">
 			<Card className="stagger-in">
@@ -346,6 +377,15 @@ function UnpairedNotice() {
 							Paired before and seeing this? Scanning the QR code again is all it takes — it re-pairs in one step.
 						</p>
 					</div>
+					{canRunLocally ? (
+						<div className="w-full border-t pt-4">
+							<p className="text-sm text-muted-foreground">Or skip the desktop entirely and transcribe on this phone.</p>
+							<Button variant="secondary" className="mt-3" onClick={onUseDevice}>
+								Transcribe on this device
+							</Button>
+							<p className="mt-2 text-xs text-muted-foreground">Downloads a model once, then works offline. Slower than your desktop.</p>
+						</div>
+					) : null}
 				</CardContent>
 			</Card>
 			<InstallHint variant="pre-pairing" />
@@ -366,8 +406,8 @@ function InsecureNotice() {
 					<code className="font-mono break-all">{location.origin}</code>, so recording is disabled.
 				</p>
 				<p className="text-sm text-muted-foreground">
-					Open it on the desktop at <code className="font-mono">http://localhost:8088</code>, or put the app behind HTTPS (or a tunnel)
-					before testing on a phone.
+					Open it on the desktop at <code className="font-mono">http://localhost:8088</code>, or put the app behind HTTPS (or a tunnel) before testing
+					on a phone.
 				</p>
 			</CardContent>
 		</Card>

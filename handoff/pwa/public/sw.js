@@ -11,7 +11,7 @@
 // screen and survive a flaky network. It deliberately NEVER cache-firsts the
 // handoff wasm, which is rebuilt constantly during development.
 
-const CACHE = 'vibe-phone-v2'
+const CACHE = 'vibe-phone-v3'
 
 /** Directory this worker was served from — `/` in dev, `/vibe/phone/` in production. */
 const BASE = new URL('./', self.location).href
@@ -19,7 +19,15 @@ const BASE = new URL('./', self.location).href
 const at = (path) => new URL(path, BASE).href
 
 // Hashed Vite assets are cached on demand; only the entry document is precached.
-const SHELL = [at('.'), at('index.html'), at('manifest.webmanifest'), at('icons/icon-192.png'), at('icons/icon-512.png'), at('icons/apple-touch-icon.png'), at('logo.svg')]
+const SHELL = [
+	at('.'),
+	at('index.html'),
+	at('manifest.webmanifest'),
+	at('icons/icon-192.png'),
+	at('icons/icon-512.png'),
+	at('icons/apple-touch-icon.png'),
+	at('logo.svg'),
+]
 
 self.addEventListener('install', (event) => {
 	event.waitUntil(
@@ -27,7 +35,7 @@ self.addEventListener('install', (event) => {
 			.open(CACHE)
 			.then((c) => c.addAll(SHELL))
 			.catch(() => undefined)
-			.then(() => self.skipWaiting())
+			.then(() => self.skipWaiting()),
 	)
 })
 
@@ -36,7 +44,7 @@ self.addEventListener('activate', (event) => {
 		caches
 			.keys()
 			.then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
-			.then(() => self.clients.claim())
+			.then(() => self.clients.claim()),
 	)
 })
 
@@ -47,8 +55,15 @@ self.addEventListener('fetch', (event) => {
 	const url = new URL(req.url)
 	if (url.origin !== self.location.origin) return
 
-	// Always network for the wasm bundle so a rebuild is picked up immediately.
-	if (url.pathname.includes('/wasm/') || url.pathname.endsWith('.wasm')) {
+	// Always network for the handoff wasm so a rebuild is picked up immediately.
+	//
+	// Scoped to `/wasm/` — the directory `chore phone-wasm` writes — and NOT to
+	// every `.wasm`. The on-device engine's ONNX Runtime ships as a hashed Vite
+	// asset under `/assets/`, and it is both immutable and the single largest
+	// thing the app needs offline. Matching it here would send 23 MB over the
+	// network on every device-mode run, and fail outright in airplane mode,
+	// which is the one case on-device transcription exists to serve.
+	if (url.pathname.includes('/wasm/')) {
 		event.respondWith(fetch(req, { cache: 'no-store' }))
 		return
 	}
@@ -79,6 +94,6 @@ self.addEventListener('fetch', (event) => {
 					throw err
 				})
 			return hit || network
-		})
+		}),
 	)
 })
