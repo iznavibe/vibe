@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
 	AlertTriangle,
 	Check,
@@ -26,6 +26,8 @@ import { Progress } from '~/components/ui/progress'
 import { Spinner } from '~/components/ui/spinner'
 import { basename, truncateId } from '~/lib/handoff'
 import { IMPORT_ACCEPT } from '~/lib/local/import'
+import { clearCrashReport, peekCrashedModelId } from '~/lib/local/crash'
+import { findModel, smallerThan } from '~/lib/local/models'
 import { languageLabel } from '~/lib/languages'
 import { formatDuration, formatSize } from '~/lib/recorder'
 import { cn } from '~/lib/style'
@@ -47,6 +49,8 @@ export function App() {
 		uploadPct,
 		transcribePct,
 		loadingModel,
+		modelPct,
+		modelPhase,
 		sizeWarning,
 		transcript,
 		savedPath,
@@ -77,6 +81,21 @@ export function App() {
 
 	const [settingsOpen, setSettingsOpen] = useState(false)
 	const fileInput = useRef<HTMLInputElement>(null)
+
+	/*
+		A value here means the previous run did not survive loading its model —
+		see `crash.ts`. The read is pure so StrictMode's double-invoke cannot
+		swallow it; the breadcrumb is cleared in an effect once it has actually
+		been committed to the screen.
+	*/
+	const [crashed, setCrashed] = useState(() => {
+		const id = peekCrashedModelId()
+		return id ? (findModel(id) ?? null) : null
+	})
+
+	useEffect(() => {
+		if (crashed) clearCrashReport()
+	}, [crashed])
 
 	const unpair = () => {
 		setSettingsOpen(false)
@@ -140,6 +159,38 @@ export function App() {
 					<CardContent className="flex items-center gap-3 pt-6 text-sm text-muted-foreground">
 						<Spinner className="size-4" />
 						<span>Asking your desktop what it can do…</span>
+					</CardContent>
+				</Card>
+			)}
+
+			{crashed && (
+				<Card className="stagger-in mb-4 border-destructive/40">
+					<CardContent className="space-y-3 pt-6">
+						<div className="flex items-center gap-2 text-destructive">
+							<AlertTriangle className="size-4" />
+							<span className="eyebrow text-destructive">restarted</span>
+						</div>
+						<h2 className="text-base font-semibold">{crashed.label} was too much for this phone</h2>
+						<p className="text-sm text-muted-foreground">
+							The app restarted while loading it, which usually means it ran out of memory. Nothing was lost — but this model will probably keep
+							doing it.
+						</p>
+						<div className="flex flex-wrap gap-2">
+							{smallerThan(crashed) && (
+								<Button
+									className="h-12 flex-1"
+									onClick={() => {
+										const next = smallerThan(crashed)
+										if (next) onLocalModelChange(next.id)
+										setCrashed(null)
+									}}>
+									Switch to {smallerThan(crashed)?.label}
+								</Button>
+							)}
+							<Button variant="outline" className="h-12 flex-1" onClick={() => setCrashed(null)}>
+								Keep {crashed.label}
+							</Button>
+						</div>
 					</CardContent>
 				</Card>
 			)}
@@ -272,6 +323,9 @@ export function App() {
 						{busy && <p className="text-xs text-muted-foreground">Keep this screen open until the transcript arrives.</p>}
 
 						{uploadPct !== null && <Meter label="Upload" value={uploadPct} />}
+						{modelPhase && modelPct !== null && (
+							<Meter label={modelPhase === 'downloading' ? 'Downloading model' : 'Loading model'} value={modelPct} />
+						)}
 						{loadingModel && <IndeterminateMeter label="Loading model" />}
 						{transcribePct !== null && <Meter label="Transcribing" value={transcribePct} />}
 

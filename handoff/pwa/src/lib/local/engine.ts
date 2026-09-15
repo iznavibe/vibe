@@ -16,6 +16,7 @@
 import type { HandoffEvent } from '../handoff'
 import { decodeToPcm, durationOf } from './audio'
 import type { LocalModel } from './models'
+import { markLoadFinished, markLoadStarted } from './crash'
 import type { WorkerReply, WorkerRequest } from './worker'
 
 export interface LocalRunOptions {
@@ -104,13 +105,16 @@ export function transcribeLocally(opts: LocalRunOptions): ReadableStream<Handoff
 
 				switch (reply.type) {
 					case 'download':
-						// Reuses the desktop's vocabulary: the session already shows an
-						// indeterminate bar and "Loading model…" for this phase, and a
-						// download is what loading a model means here.
-						controller.enqueue({ type: 'status', phase: 'loading_model' })
+						// Two different waits with very different meanings: a first
+						// download of several hundred megabytes, or a read out of the
+						// cache. Saying "downloading" for the second is how a user
+						// concludes the cache is not working.
+						controller.enqueue({ type: 'status', phase: reply.cached ? 'loading_model' : 'downloading_model' })
 						controller.enqueue({ type: 'progress', progress: reply.pct })
 						break
 					case 'ready':
+						// Survived the load, so there is no crash to report.
+						markLoadFinished()
 						controller.enqueue({ type: 'status', phase: 'transcribing' })
 						break
 					case 'progress':
@@ -130,12 +134,16 @@ export function transcribeLocally(opts: LocalRunOptions): ReadableStream<Handoff
 						break
 					}
 					case 'error':
+						// A reported error is not a crash — the page is still alive to
+						// show it, so the breadcrumb would be a false positive.
+						markLoadFinished()
 						finish({ type: 'error', code: 'local_engine', message: reply.message })
 						break
 				}
 			}
 
 			const onError = (e: ErrorEvent) => {
+				markLoadFinished()
 				resetEngine()
 				finish({ type: 'error', code: 'local_engine', message: e.message || 'The on-device engine stopped unexpectedly.' })
 			}
@@ -154,6 +162,11 @@ export function transcribeLocally(opts: LocalRunOptions): ReadableStream<Handoff
 				controller.enqueue({ type: 'status', phase: 'decoding' })
 				const pcm = await decodeToPcm(opts.blob)
 
+				// From here the worker loads weights, which is the step that can
+				// exhaust memory and take the whole page with it. If that happens
+				// nothing below runs, and this breadcrumb is the only evidence left.
+				markLoadStarted(opts.model.id)
+
 				const request: WorkerRequest = {
 					type: 'transcribe',
 					id,
@@ -167,6 +180,7 @@ export function transcribeLocally(opts: LocalRunOptions): ReadableStream<Handoff
 				// ~230 MB and structured-cloning that on a phone is a real stall.
 				w.postMessage(request, [pcm.buffer])
 			} catch (err) {
+				markLoadFinished()
 				finish({ type: 'error', code: 'decode_failed', message: err instanceof Error ? err.message : String(err) })
 			}
 		},

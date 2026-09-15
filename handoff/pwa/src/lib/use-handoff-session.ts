@@ -85,6 +85,13 @@ export function useHandoffSession() {
 	const [savedPath, setSavedPath] = useState<string | null>(null)
 	const [sizeWarning, setSizeWarning] = useState(false)
 	const [loadingModel, setLoadingModel] = useState(false)
+	/**
+	 * Progress through the on-device model's weights, and which wait it is.
+	 * The desktop reports no percentage for its own model load, so this stays
+	 * null there and the indeterminate bar covers it.
+	 */
+	const [modelPct, setModelPct] = useState<number | null>(null)
+	const [modelPhase, setModelPhase] = useState<'downloading' | 'loading' | null>(null)
 
 	// Engine selection. `auto` prefers the paired desktop and falls back to the
 	// device; the explicit choices never cross over.
@@ -350,6 +357,8 @@ export function useHandoffSession() {
 			setTranscribePct(null)
 			setSavedPath(null)
 			setLoadingModel(false)
+			setModelPct(null)
+			setModelPhase(null)
 			setActiveId(queuedId)
 			setPhase('sending')
 			setStatus(useDevice ? 'Preparing…' : 'Connecting to your desktop…')
@@ -408,20 +417,42 @@ export function useHandoffSession() {
 								setLoadingModel(false)
 								setTranscribePct(null)
 								setStatus('Decoding audio…')
+							} else if (event.phase === 'downloading_model') {
+								// First time only — several hundred megabytes over the
+								// network, and the one wait worth showing a real bar for.
+								setModelPhase('downloading')
+								setTranscribePct(null)
+								setStatus('Downloading model…')
+							} else if (useDevice && event.phase === 'loading_model') {
+								// Already downloaded; this is the read into memory.
+								setModelPhase('loading')
+								setTranscribePct(null)
+								setStatus('Loading model…')
 							} else if (event.phase === 'loading_model') {
 								setLoadingModel(true)
 								setTranscribePct(null)
 								setStatus(useDevice ? 'Downloading model to this device…' : 'Loading model on your desktop…')
 							} else if (event.phase === 'transcribing') {
 								setLoadingModel(false)
+								setModelPhase(null)
+								setModelPct(null)
 								setTranscribePct((current) => current ?? 0)
 								setStatus('Transcribing…')
 							}
 							break
-						case 'progress':
+						case 'progress': {
+							const pct = Math.max(0, Math.min(100, Math.round(Number(event.progress) || 0)))
+							// A `progress` during a model phase is weights, not audio.
+							// The phase is cleared by `transcribing` below, which is the
+							// event that says the model is in and the audio has started.
+							setModelPhase((phase) => {
+								if (phase) setModelPct(pct)
+								else setTranscribePct(pct)
+								return phase
+							})
 							setLoadingModel(false)
-							setTranscribePct(Math.max(0, Math.min(100, Math.round(Number(event.progress) || 0))))
 							break
+						}
 						case 'segment':
 							segmentsRef.current.push(String(event.text ?? ''))
 							setTranscript(segmentsRef.current.join(' ').replace(/\s+/g, ' ').trim())
@@ -828,6 +859,8 @@ export function useHandoffSession() {
 		uploadPct,
 		transcribePct,
 		loadingModel,
+		modelPct,
+		modelPhase,
 		sizeWarning,
 		transcript,
 		savedPath,

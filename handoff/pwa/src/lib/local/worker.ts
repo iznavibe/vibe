@@ -22,6 +22,25 @@ import { pipeline, WhisperTextStreamer, env, type AutomaticSpeechRecognitionPipe
 import { createProgressTracker } from './progress'
 
 /**
+ * Whether this repo's files are already in the browser cache.
+ *
+ * Duplicated from `models.ts` rather than imported because that module pulls in
+ * `localStorage` helpers a worker has no business touching, and the check is
+ * three lines. Advisory either way: a miss means "could not confirm".
+ */
+async function isRepoCached(repo: string): Promise<boolean> {
+	try {
+		if (typeof caches === 'undefined') return false
+		const cache = await caches.open('transformers-cache')
+		const keys = await cache.keys()
+		const prefix = repo.toLowerCase()
+		return keys.some((req) => req.url.toLowerCase().includes(prefix))
+	} catch {
+		return false
+	}
+}
+
+/**
  * The streamer is typed against `WhisperTokenizer`, but a pipeline exposes its
  * tokenizer as the base `PreTrainedTokenizer`. Loading a Whisper repo always
  * yields the Whisper subclass, so this narrows what the types cannot.
@@ -54,8 +73,13 @@ export interface PreloadRequest {
 export type WorkerRequest = TranscribeRequest | PreloadRequest
 
 export type WorkerReply =
-	/** Weights coming down the wire. `pct` is across all files, not per file. */
-	| { type: 'download'; id: string; pct: number; loaded: number; total: number }
+	/**
+	 * Weights being read in. `cached` distinguishes a first download from a
+	 * read out of the browser cache: transformers.js reports progress
+	 * identically for both, so without this the UI claims to be downloading a
+	 * model the user already has.
+	 */
+	| { type: 'download'; id: string; pct: number; loaded: number; total: number; cached: boolean }
 	/** Weights are in memory and warm. */
 	| { type: 'ready'; id: string }
 	| { type: 'progress'; id: string; pct: number }
@@ -100,6 +124,10 @@ async function getPipeline(id: string, repo: string, dtype: Record<string, DataT
 
 	const files = new Map<string, FileProgress>()
 
+	// Asked once, before loading starts: mid-load the cache is being written to,
+	// so the answer would change under us.
+	const cached = await isRepoCached(repo)
+
 	const pipe = (await pipeline('automatic-speech-recognition', repo, {
 		device: 'webgpu',
 		dtype,
@@ -115,7 +143,14 @@ async function getPipeline(id: string, repo: string, dtype: Record<string, DataT
 				totalBytes += f.total
 			}
 			if (totalBytes > 0) {
-				post({ type: 'download', id, pct: Math.min(100, Math.round((loadedBytes / totalBytes) * 100)), loaded: loadedBytes, total: totalBytes })
+				post({
+					type: 'download',
+					id,
+					pct: Math.min(100, Math.round((loadedBytes / totalBytes) * 100)),
+					loaded: loadedBytes,
+					total: totalBytes,
+					cached,
+				})
 			}
 		},
 	})) as AutomaticSpeechRecognitionPipeline
