@@ -246,11 +246,25 @@ backend fix. That is the immediate next step.
 
 ### Measured performance — CPU/WASM backend, 8 s of audio, desktop CPU
 
-| model            | inference | vs realtime        |
-| ---------------- | --------- | ------------------ |
-| Base             | 2.7 s     | ~3× faster ✅       |
-| Small            | 141.9 s   | ~18× slower ❌      |
-| Large v3 Turbo   | not offered on CPU | —         |
+| model          | inference           | vs realtime   |
+| -------------- | ------------------- | ------------- |
+| Base           | 2.7 s               | ~3× faster ✅  |
+| Small          | 141.9 s             | ~18× slower ❌ |
+| Large v3 Turbo | >20 min, abandoned  | unusable ❌    |
+
+Turbo was measured, not assumed (2026-09-17). `q4` encoder + `fp16` decoder,
+733 MB, loaded from cache, 10 s of audio: still running after twenty minutes on
+a desktop CPU before the run was abandoned.
+
+The hope was that turbo's **4-layer decoder** (vs Small's 12) would make it
+cheap, since the decoder runs per token and usually dominates. It does not
+help enough: turbo keeps large-v3's full **32-layer, 1280-dim encoder**, and one
+encoder pass per 30 s window is what the CPU cannot absorb.
+
+A secondary finding worth keeping: on CPU, **quantised decoders are slower than
+`fp32`**, not faster. Base measured `q8/fp32` 6.4 s vs `q8/q4` 15.9 s and
+`q8/fp16` 15.4 s — roughly 2.4× — because int4/fp16 matmul has no optimised CPU
+kernel here. Quantisation buys download size and costs speed on this backend.
 
 A phone is slower than this. **Base is realistically the only usable model on iOS**
 while JSEP is broken. Small is listed with that stated plainly. Turbo has no CPU
@@ -268,9 +282,13 @@ variant — offering it would cost ~724 MB to discover it cannot run.
 
 ## The open question
 
-**Is Base good enough for Korean?** Everything else hangs on this, and it has not
-been answered. The desktop runs `ggml-large-v3` (3.0 GB); Base is a different
-league.
+**Is Base good enough for Korean?** Everything else hangs on this. The desktop
+runs `ggml-large-v3` (3.0 GB); Base is a different league.
+
+Turbo on-device is settled and the answer is no — see the measurement above. It
+is not a configuration that needs finding: WebGPU is unusable on WebKit, and the
+CPU cannot run a 32-layer encoder at any tolerable speed. Nothing in this
+codebase can change that.
 
 If Base is not good enough, the options are:
 
