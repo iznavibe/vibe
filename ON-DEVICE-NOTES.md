@@ -418,6 +418,66 @@ a `coi-serviceworker` shim. Models become ggml `.bin` from
 Worth noting this also puts the phone on the **same engine as the desktop**
 (ggml/whisper.cpp), which is a better architectural fit than the current split.
 
+## Turbo shipped (2026-09-17)
+
+`large-v3-turbo` now runs on the phone through whisper.cpp. Measured end to end
+in the app on a desktop CPU: **62 s for 30 s of audio**.
+
+Both engines are kept. Models declare a `runtime`: `base` and `small` stay on
+ONNX (proven on a real phone), `large-v3-turbo` uses whisper.cpp. A model that
+breaks takes only itself down.
+
+### Four configurations, one that works
+
+`initWhisper` hangs forever — no error, no timeout, nothing in the console — in
+every arrangement but the last:
+
+| configuration | result |
+| --- | --- |
+| our own worker, runtime inline | hangs (nested pthreads) |
+| main thread, package's own worker (`worker: true`) | hangs |
+| any of the above with `jsPath`/`wasmPath`/`locateFileBaseUrl` set | hangs |
+| **main thread, runtime inline, default path resolution** | **works** |
+
+The path overrides are the subtle one: the runtime *loads* fine with them, then
+hangs later waiting on a thread pool whose workers never start, because
+Emscripten resolves the pthread worker script from the module's own URL. So
+`scripts/copy-whisper.mjs` preserves the package's layout **at the app root**
+(`index.js`, `worker.js`, `wasm/`) and `whisper-client.ts` overrides nothing but
+`threads`.
+
+The cost is that inference blocks the main thread — the tab is frozen for the
+length of the run. Acceptable only because the app already asks the user to keep
+the screen open. Worth revisiting if the package ever supports a worker that
+does not hang.
+
+### Cross-origin isolation
+
+Threads are worth ~4x and need SharedArrayBuffer, which needs COOP/COEP, which
+GitHub Pages will not send. The service worker adds them — on **every**
+same-origin response, not just navigations: a worker script served without them
+fails to load with an empty `ErrorEvent` that names nothing and reads as a bug
+inside the worker.
+
+The app reloads once to pick this up, triggered by `controllerchange` rather
+than by registration completing. A reload issued before the worker controls the
+page yields another uncontrolled document *and* burns the one-shot guard, so it
+never recovers.
+
+### Other traps hit shipping this
+
+- **Vite must emit workers as ES modules** (`worker.format: 'es'`). The default
+  IIFE cannot carry the ONNX worker's dynamic import; it fails at load with —
+  again — an empty `ErrorEvent`.
+- The service worker's cache-bypass is matched on `handoff_wasm`, not `/wasm/`.
+  whisper's runtime now shares that directory and must be cached to work offline.
+- Cached-model checks route per runtime: ONNX weights live in
+  `transformers-cache` keyed by repo, ggml in `whisper-ggml` keyed by exact URL.
+  Checking the wrong one makes settings report a downloaded model as missing and
+  "Remove download" silently do nothing.
+- An empty `ErrorEvent` from a worker means the *script* failed to load. It never
+  means the code inside threw. Three separate hours went into learning that once.
+
 ## The open question
 
 **Is Base good enough for Korean?** Everything else hangs on this. The desktop
