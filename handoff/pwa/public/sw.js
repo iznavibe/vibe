@@ -11,7 +11,7 @@
 // screen and survive a flaky network. It deliberately NEVER cache-firsts the
 // handoff wasm, which is rebuilt constantly during development.
 
-const CACHE = 'vibe-phone-v3'
+const CACHE = 'vibe-phone-v4'
 
 /** Directory this worker was served from — `/` in dev, `/vibe/phone/` in production. */
 const BASE = new URL('./', self.location).href
@@ -48,6 +48,26 @@ self.addEventListener('activate', (event) => {
 	)
 })
 
+/**
+ * Re-issue a response carrying the headers that make the page isolated.
+ *
+ * Applied to *every* same-origin response, not only navigations. A dedicated
+ * worker spawned from an isolated document inherits that isolation, and its
+ * script must be served consistently with it — without these headers on the
+ * worker script itself, `new Worker(url, { type: 'module' })` fails with an
+ * empty ErrorEvent naming nothing, which reads as a bug inside the worker. It
+ * is not: it is the script response missing the policy.
+ */
+function isolate(res) {
+	// A redirected response cannot be reconstructed this way; hand it back as
+	// it is rather than throwing on `new Response`.
+	if (!res || res.status === 0 || res.type === 'opaqueredirect' || res.redirected) return res
+	const headers = new Headers(res.headers)
+	headers.set('Cross-Origin-Opener-Policy', 'same-origin')
+	headers.set('Cross-Origin-Embedder-Policy', 'credentialless')
+	return new Response(res.body, { status: res.status, statusText: res.statusText, headers })
+}
+
 self.addEventListener('fetch', (event) => {
 	const req = event.request
 	if (req.method !== 'GET') return
@@ -63,15 +83,35 @@ self.addEventListener('fetch', (event) => {
 	// thing the app needs offline. Matching it here would send 23 MB over the
 	// network on every device-mode run, and fail outright in airplane mode,
 	// which is the one case on-device transcription exists to serve.
-	if (url.pathname.includes('/wasm/')) {
+	//
+	// Matched by filename, not by directory: whisper.cpp's runtime now shares
+	// `/wasm/` and must be cached, or on-device transcription dies offline —
+	// the one thing it exists for.
+	if (url.pathname.includes('handoff_wasm')) {
 		event.respondWith(fetch(req, { cache: 'no-store' }))
 		return
 	}
 
 	// Navigations: network first, cached shell as the offline fallback. The
 	// fallback is this app's own index.html, not the site root's.
+	//
+	// The document response also gains the cross-origin isolation headers, which
+	// is the whole reason this app can use wasm threads. whisper.cpp needs
+	// threads (worth ~4x), threads need SharedArrayBuffer, and that needs
+	// COOP/COEP on the document — which GitHub Pages will not send and offers no
+	// way to configure. A service worker can add them on the way out.
+	//
+	// `credentialless` rather than `require-corp`: models come cross-origin from
+	// Hugging Face, and `require-corp` would demand a CORP header on every one
+	// of those responses that we do not control. `credentialless` drops
+	// credentials from such requests instead, which is correct for public files
+	// and keeps the page isolated.
 	if (req.mode === 'navigate') {
-		event.respondWith(fetch(req).catch(() => caches.match(at('index.html')).then((r) => r || Response.error())))
+		event.respondWith(
+			fetch(req)
+				.then(isolate)
+				.catch(() => caches.match(at('index.html')).then((r) => (r ? isolate(r) : Response.error()))),
+		)
 		return
 	}
 
@@ -93,7 +133,10 @@ self.addEventListener('fetch', (event) => {
 					if (hit) return hit
 					throw err
 				})
-			return hit || network
+			// Isolation headers go on the served response, never on the cached
+			// copy: what is stored stays the plain upstream response, so changing
+			// the policy later does not invalidate the whole cache.
+			return Promise.resolve(hit || network).then(isolate)
 		}),
 	)
 })

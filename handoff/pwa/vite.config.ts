@@ -18,6 +18,17 @@ const PROD_BASE = process.env.PWA_BASE ?? '/vibe/phone/'
 export default defineConfig(({ command }) => ({
 	base: command === 'serve' ? '/' : PROD_BASE,
 	plugins: [react(), tailwindcss()],
+	/*
+		Workers must be ES modules, not Vite's default IIFE.
+
+		The whisper.cpp worker loads its runtime with a dynamic `import()` of a
+		URL under `public/`, and an IIFE bundle cannot carry that — the worker
+		fails at load with an empty `ErrorEvent`, which surfaces as "the engine
+		stopped unexpectedly" and says nothing about why.
+	*/
+	worker: {
+		format: 'es',
+	},
 	resolve: {
 		alias: {
 			'~': '/src',

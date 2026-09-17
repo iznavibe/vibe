@@ -26,11 +26,30 @@ export interface ModelVariant {
 	approxBytes: number
 }
 
+/**
+ * Which engine runs a model.
+ *
+ * `onnx` is transformers.js over ONNX Runtime — fast enough for the small
+ * models and already proven on a real phone. `whisper-cpp` is ggml through
+ * whisper.cpp, the same engine the desktop uses, and the only one that runs
+ * large-v3-turbo at a speed anyone would wait for: on one desktop CPU, 30 s of
+ * audio took 74.5 s under whisper.cpp and over twenty minutes under ORT before
+ * the run was abandoned.
+ *
+ * Both are kept rather than standardising on one. whisper.cpp wins where it
+ * matters, but ORT is what currently works on the user's phone, and keeping it
+ * means a model that fails takes only itself down rather than the feature.
+ */
+export type Runtime = 'onnx' | 'whisper-cpp'
+
 export interface LocalModel {
 	id: string
-	/** Hugging Face repo, loaded by transformers.js. */
+	/** Hugging Face repo, loaded by transformers.js. Unused by whisper.cpp models. */
 	repo: string
 	label: string
+	runtime: Runtime
+	/** whisper.cpp only: the ggml weights to download. */
+	ggmlUrl?: string
 	/**
 	 * Quantisation is not a free choice — it has to suit the backend.
 	 *
@@ -66,6 +85,7 @@ export const LOCAL_MODELS: LocalModel[] = [
 		id: 'base',
 		repo: 'onnx-community/whisper-base',
 		label: 'Base',
+		runtime: 'onnx',
 		variants: {
 			// encoder_model_fp16 39.4 + decoder_model_merged_quantized 51.2
 			webgpu: { dtype: { encoder_model: 'fp16', decoder_model_merged: 'q8' }, approxBytes: 91 * MB },
@@ -78,6 +98,7 @@ export const LOCAL_MODELS: LocalModel[] = [
 		id: 'small',
 		repo: 'onnx-community/whisper-small',
 		label: 'Small',
+		runtime: 'onnx',
 		variants: {
 			// encoder_model_fp16 168.4 + decoder_model_merged_quantized 149.5
 			webgpu: { dtype: { encoder_model: 'fp16', decoder_model_merged: 'q8' }, approxBytes: 318 * MB },
@@ -90,19 +111,23 @@ export const LOCAL_MODELS: LocalModel[] = [
 		id: 'large-v3-turbo',
 		repo: 'onnx-community/whisper-large-v3-turbo',
 		label: 'Large v3 Turbo',
+		runtime: 'whisper-cpp',
+		ggmlUrl: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin',
+		/*
+			Same 547 MB ggml file on either backend. whisper.cpp does not use the
+			WebGPU/WASM split the ONNX models do — quantisation is baked into the
+			file rather than chosen per backend — but both entries exist so the
+			model is offered everywhere rather than being filtered out.
+
+			Under ORT this model was unusable: over twenty minutes for ten seconds
+			of audio before the run was abandoned. Under whisper.cpp the same
+			machine did thirty seconds of audio in 74.5 s.
+		*/
 		variants: {
-			// encoder_model_q4f16 352.8 + decoder_model_merged_q4f16 184.5
-			webgpu: { dtype: { encoder_model: 'q4f16', decoder_model_merged: 'q4f16' }, approxBytes: 537 * MB },
-			/*
-				Nothing honest to offer on CPU. The fp16 weights this model is
-				worth using do not load on that backend at all, and the ones that
-				do come to ~724 MB of int4 that a phone would spend the download
-				on and then fail to run at any usable speed. Offering it would
-				cost the user most of a gigabyte to discover that.
-			*/
-			wasm: null,
+			webgpu: { dtype: {}, approxBytes: 547 * MB },
+			wasm: { dtype: {}, approxBytes: 547 * MB },
 		},
-		note: 'Closest to what your desktop produces. Needs GPU acceleration — not available in Safari.',
+		note: 'Closest to your desktop. Slow on a phone — expect several minutes per minute of audio, with the screen kept on.',
 	},
 ]
 
@@ -186,13 +211,29 @@ export function saveModelId(id: string): void {
  * directly couples us to that implementation detail, which is why the check is
  * advisory: a miss means "we could not confirm", never "it will re-download".
  */
+/**
+ * Which cache holds a model's weights, and what identifies them in it.
+ *
+ * The two runtimes store their downloads differently: transformers.js writes
+ * ONNX files into `transformers-cache` under URLs containing the repo name,
+ * while the whisper.cpp path writes one ggml file into `whisper-ggml` keyed by
+ * its exact URL. Checking the wrong one makes settings report a downloaded
+ * model as missing, and makes "Remove download" silently do nothing.
+ */
+function cacheLocation(model: LocalModel): { cacheName: string; match: string } {
+	return model.runtime === 'whisper-cpp'
+		? { cacheName: 'whisper-ggml', match: (model.ggmlUrl ?? '').toLowerCase() }
+		: { cacheName: 'transformers-cache', match: model.repo.toLowerCase() }
+}
+
 export async function isModelCached(model: LocalModel): Promise<boolean> {
 	try {
 		if (!('caches' in window)) return false
-		const cache = await caches.open('transformers-cache')
+		const { cacheName, match } = cacheLocation(model)
+		if (!match) return false
+		const cache = await caches.open(cacheName)
 		const keys = await cache.keys()
-		const prefix = model.repo.toLowerCase()
-		return keys.some((req) => req.url.toLowerCase().includes(prefix))
+		return keys.some((req) => req.url.toLowerCase().includes(match))
 	} catch {
 		return false
 	}
@@ -201,8 +242,9 @@ export async function isModelCached(model: LocalModel): Promise<boolean> {
 /** Drop a model's cached files. The only way a user can reclaim the space. */
 export async function evictModel(model: LocalModel): Promise<void> {
 	if (!('caches' in window)) return
-	const cache = await caches.open('transformers-cache')
+	const { cacheName, match } = cacheLocation(model)
+	if (!match) return
+	const cache = await caches.open(cacheName)
 	const keys = await cache.keys()
-	const prefix = model.repo.toLowerCase()
-	await Promise.all(keys.filter((req) => req.url.toLowerCase().includes(prefix)).map((req) => cache.delete(req)))
+	await Promise.all(keys.filter((req) => req.url.toLowerCase().includes(match)).map((req) => cache.delete(req)))
 }

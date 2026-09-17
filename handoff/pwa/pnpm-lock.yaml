@@ -11,6 +11,9 @@ importers:
       '@fontsource-variable/inter':
         specifier: ^5.3.0
         version: 5.3.0
+      '@fugood/whisper.node':
+        specifier: 1.2.0-rc.0
+        version: 1.2.0-rc.0
       '@huggingface/transformers':
         specifier: ^4.2.0
         version: 4.2.0
@@ -331,6 +334,83 @@ packages:
 
   '@fontsource-variable/inter@5.3.0':
     resolution: {integrity: sha512-OupL48va4JNofb97w6NYeF9S7W/kHNKM0Er8Dem5nqi4jeOLrVJDoE8tZEpnMJmtkvNbB1EIPPwHcdkF6b1oUA==}
+
+  '@fugood/node-whisper-darwin-arm64@1.2.0-rc.0':
+    resolution: {integrity: sha512-iIf5feNA7f/CFCX4xDd5hEz6q2eOlJ3FyJbNgn3ugDWhKEu8JN86tMPaImO+0qZGu5FZ1HFGL430bNh7tj5qNA==}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@fugood/node-whisper-darwin-x64@1.2.0-rc.0':
+    resolution: {integrity: sha512-A06sgtR1/JT2MJFdraVUGTzF3zkHNDN5ZBu0m4h87LmsG/Y67sKj/2aeGterX/xXOPtSxDtAijY/jeUASeTR5g==}
+    cpu: [x64]
+    os: [darwin]
+
+  '@fugood/node-whisper-linux-arm64-cuda@1.2.0-rc.0':
+    resolution: {integrity: sha512-WBGumbwewVEMQLriCNG1sborqbZ1lYAdm+NZ24qn3wDaY/SAqdThN8fN2tTaRI0bv5eQRpiQT1ZMfxJDpOMKCg==}
+    cpu: [arm64]
+    os: [linux]
+
+  '@fugood/node-whisper-linux-arm64-snapdragon@1.2.0-rc.0':
+    resolution: {integrity: sha512-xkq89IqgdvlYku76sYgU+gswT3EKA4nDhQSMngHE8tGMRVlCPa+DI5SMzlxmmOAcqdM0cqIi8zf6kHK6EpVh9g==}
+    cpu: [arm64]
+    os: [linux]
+
+  '@fugood/node-whisper-linux-arm64-vulkan@1.2.0-rc.0':
+    resolution: {integrity: sha512-ryR78maLhzCUVKAgFYVtjOADMsk9JIafF0+BPukJw5motfIMgqLai2I8wchqweD8DcFejaAA2evt6xAQUBsryA==}
+    cpu: [arm64]
+    os: [linux]
+
+  '@fugood/node-whisper-linux-arm64@1.2.0-rc.0':
+    resolution: {integrity: sha512-PK2v3+XGHeQdGm9PGiMjwIbtia3/aOFsAnBerELUDoyEPA3mzUqHwrXYj+kDm6sy5myOMpxJ/wP+We6q6H2YVA==}
+    cpu: [arm64]
+    os: [linux]
+
+  '@fugood/node-whisper-linux-x64-cuda@1.2.0-rc.0':
+    resolution: {integrity: sha512-P6YHfx07U2KOA9aQnpFFdecU6/XBe3EbfycxzB3dCgdxpJ5vO/Lw68icb0V9v5vWUWeiatU9V+dciPlROp6VUg==}
+    cpu: [x64]
+    os: [linux]
+
+  '@fugood/node-whisper-linux-x64-vulkan@1.2.0-rc.0':
+    resolution: {integrity: sha512-Ey5HbiHmuhbQdEiFqex2yZ6/lGHd0OWgaidkI2T69PIae6c5L2si6z7FQJndskbeYJT0IvEIAE+A7SGx+Qs3hQ==}
+    cpu: [x64]
+    os: [linux]
+
+  '@fugood/node-whisper-linux-x64@1.2.0-rc.0':
+    resolution: {integrity: sha512-xZfqKuUvQ4tfyqgVPl0eEJtTbiVLLNP2ixlKVOBqCXonigx4R0qKZMSNA28/sDWzbSo/ii4Q3wnZOQCP+fCabA==}
+    cpu: [x64]
+    os: [linux]
+
+  '@fugood/node-whisper-wasm@1.2.0-rc.0':
+    resolution: {integrity: sha512-1NdD8qKXrGoBVEC+VuqEm6AqCArgHxK0kfZqfkMGbxuc9tBfvnKcUeiqPkf2SsAt8XdM7Z/95Yy8tru8WuniAA==}
+
+  '@fugood/node-whisper-win32-arm64-vulkan@1.2.0-rc.0':
+    resolution: {integrity: sha512-Lx/4wv6N6Wj/8uQrVKf07fxNnk51LvSnTJ/uVFKnN7bX1QLeTCu/wjNhICIIeRdbCqbxxNUqc9RDkKrWsXM6rw==}
+    cpu: [arm64]
+    os: [win32]
+
+  '@fugood/node-whisper-win32-arm64@1.2.0-rc.0':
+    resolution: {integrity: sha512-WiQCEc9zfuP0Wdp8ZpG9QmsPhDi8GejWTH9Oa3C5NLggzIiDCpqYL6yvHBFySFpKXbqoumkvsAilJJvKPJzKkw==}
+    cpu: [arm64]
+    os: [win32]
+
+  '@fugood/node-whisper-win32-x64-cuda@1.2.0-rc.0':
+    resolution: {integrity: sha512-zdwpjooxWjQRt8vxr0bCMmnh092qmYh9jSPCz1URvkHj48USUzltSoquooIpN0MuZs4/1UQwgt0KkDFubNUngg==}
+    cpu: [x64]
+    os: [win32]
+
+  '@fugood/node-whisper-win32-x64-vulkan@1.2.0-rc.0':
+    resolution: {integrity: sha512-C6TmAs7NX4ysfA7hHrT16QwF1U0aHLcMGMz0h1sMnHmiHG4t9FfHKABBMtVhT1T2n+p3Mxoi4XqXFweORfjSEQ==}
+    cpu: [x64]
+    os: [win32]
+
+  '@fugood/node-whisper-win32-x64@1.2.0-rc.0':
+    resolution: {integrity: sha512-3oWA8tO2Zcfnx0niPYR8bjk4/yDqDrjHxp3OU7dLsvfMrFYpTinsL9AX1OTJ4UpYFNjrGmRxyOBJOKWvaW/ELg==}
+    cpu: [x64]
+    os: [win32]
+
+  '@fugood/whisper.node@1.2.0-rc.0':
+    resolution: {integrity: sha512-Z4/LXgc7KpcVxaWqd1+DhREEDVX08KJGZDEVb+dzoHwQi2URd0GnzG/nNy7CWMg4YU8or9OQh3X33VuF85879w==}
+    engines: {node: '>=16.0.0'}
 
   '@huggingface/jinja@0.5.10':
     resolution: {integrity: sha512-SgS1D1bglQ94ceD4ZCL6eayUDy9uV1xuyk61OjgSxU5GJh7upqZCKII0JoTYMc6wWsg3JUgaPRX0ElQzXPk3Cw==}
@@ -1705,6 +1785,69 @@ snapshots:
   '@floating-ui/utils@0.2.12': {}
 
   '@fontsource-variable/inter@5.3.0': {}
+
+  '@fugood/node-whisper-darwin-arm64@1.2.0-rc.0':
+    optional: true
+
+  '@fugood/node-whisper-darwin-x64@1.2.0-rc.0':
+    optional: true
+
+  '@fugood/node-whisper-linux-arm64-cuda@1.2.0-rc.0':
+    optional: true
+
+  '@fugood/node-whisper-linux-arm64-snapdragon@1.2.0-rc.0':
+    optional: true
+
+  '@fugood/node-whisper-linux-arm64-vulkan@1.2.0-rc.0':
+    optional: true
+
+  '@fugood/node-whisper-linux-arm64@1.2.0-rc.0':
+    optional: true
+
+  '@fugood/node-whisper-linux-x64-cuda@1.2.0-rc.0':
+    optional: true
+
+  '@fugood/node-whisper-linux-x64-vulkan@1.2.0-rc.0':
+    optional: true
+
+  '@fugood/node-whisper-linux-x64@1.2.0-rc.0':
+    optional: true
+
+  '@fugood/node-whisper-wasm@1.2.0-rc.0':
+    optional: true
+
+  '@fugood/node-whisper-win32-arm64-vulkan@1.2.0-rc.0':
+    optional: true
+
+  '@fugood/node-whisper-win32-arm64@1.2.0-rc.0':
+    optional: true
+
+  '@fugood/node-whisper-win32-x64-cuda@1.2.0-rc.0':
+    optional: true
+
+  '@fugood/node-whisper-win32-x64-vulkan@1.2.0-rc.0':
+    optional: true
+
+  '@fugood/node-whisper-win32-x64@1.2.0-rc.0':
+    optional: true
+
+  '@fugood/whisper.node@1.2.0-rc.0':
+    optionalDependencies:
+      '@fugood/node-whisper-darwin-arm64': 1.2.0-rc.0
+      '@fugood/node-whisper-darwin-x64': 1.2.0-rc.0
+      '@fugood/node-whisper-linux-arm64': 1.2.0-rc.0
+      '@fugood/node-whisper-linux-arm64-cuda': 1.2.0-rc.0
+      '@fugood/node-whisper-linux-arm64-snapdragon': 1.2.0-rc.0
+      '@fugood/node-whisper-linux-arm64-vulkan': 1.2.0-rc.0
+      '@fugood/node-whisper-linux-x64': 1.2.0-rc.0
+      '@fugood/node-whisper-linux-x64-cuda': 1.2.0-rc.0
+      '@fugood/node-whisper-linux-x64-vulkan': 1.2.0-rc.0
+      '@fugood/node-whisper-wasm': 1.2.0-rc.0
+      '@fugood/node-whisper-win32-arm64': 1.2.0-rc.0
+      '@fugood/node-whisper-win32-arm64-vulkan': 1.2.0-rc.0
+      '@fugood/node-whisper-win32-x64': 1.2.0-rc.0
+      '@fugood/node-whisper-win32-x64-cuda': 1.2.0-rc.0
+      '@fugood/node-whisper-win32-x64-vulkan': 1.2.0-rc.0
 
   '@huggingface/jinja@0.5.10': {}
 

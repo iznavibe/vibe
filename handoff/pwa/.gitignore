@@ -7,3 +7,9 @@ public/wasm
 # Copied from node_modules by `scripts/copy-ort.mjs` (runs automatically before
 # dev and build). 35 MB of binaries that the lockfile already pins.
 public/ort
+
+# Copied from node_modules by `scripts/copy-whisper.mjs` (runs with the ORT
+# copy). At the app root because the package resolves its own sibling paths.
+public/index.js
+public/worker.js
+public/wasm

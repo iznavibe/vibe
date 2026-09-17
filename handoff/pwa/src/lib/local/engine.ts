@@ -15,9 +15,10 @@
 
 import type { HandoffEvent } from '../handoff'
 import { decodeToPcm, durationOf } from './audio'
-import { variantFor, type LocalModel } from './models'
+import { variantFor, type LocalModel, type Runtime } from './models'
 import { markLoadFinished, markLoadStarted } from './crash'
 import { pickBackend } from './backend'
+import { resetWhisper, runWhisper } from './whisper-client'
 import type { WorkerReply, WorkerRequest } from './worker'
 
 export interface LocalRunOptions {
@@ -37,10 +38,26 @@ export interface LocalRunOptions {
  * across a queue of recordings.
  */
 let worker: Worker | null = null
+let workerRuntime: Runtime | null = null
 
-function getWorker(): Worker {
+/**
+ * One worker for the page, for the ONNX engine.
+ *
+ * Workers are not free — spawning one per recording would re-initialise the
+ * engine every time, which is the expensive part.
+ *
+ * Only the ONNX path has one. whisper.cpp runs from the main thread and owns
+ * its own worker internally; see `whisper-client.ts` for why it cannot be
+ * nested inside one of ours.
+ */
+function getWorker(runtime: Runtime): Worker {
+	if (worker && workerRuntime !== runtime) {
+		worker.terminate()
+		worker = null
+	}
 	if (!worker) {
 		worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' })
+		workerRuntime = runtime
 	}
 	return worker
 }
@@ -52,6 +69,7 @@ function getWorker(): Worker {
 export function resetEngine(): void {
 	worker?.terminate()
 	worker = null
+	workerRuntime = null
 }
 
 let counter = 0
@@ -82,12 +100,81 @@ export async function localEngineAvailable(): Promise<boolean> {
  * fast relative to inference and the wait is reported as a `status` phase so
  * the UI is never silent.
  */
+/**
+ * The whisper.cpp path, as the same `HandoffEvent` stream.
+ *
+ * Runs on the main thread rather than in a worker — see `whisper-client.ts` for
+ * why — so the events are produced directly instead of being relayed from
+ * `postMessage`. The shape is identical, which is the whole point: the session
+ * cannot tell the two engines apart.
+ */
+function whisperStream(opts: LocalRunOptions): ReadableStream<HandoffEvent> {
+	return new ReadableStream<HandoffEvent>({
+		async start(controller) {
+			let closed = false
+			const finish = (event: HandoffEvent) => {
+				if (closed) return
+				closed = true
+				markLoadFinished()
+				controller.enqueue(event)
+				controller.close()
+			}
+
+			try {
+				if (!opts.model.ggmlUrl) throw new Error(`${opts.model.label} has no weights configured.`)
+
+				controller.enqueue({ type: 'status', phase: 'decoding' })
+				const pcm = await decodeToPcm(opts.blob)
+
+				// Everything past here can exhaust memory and take the page with
+				// it; this breadcrumb is the only evidence left if it does.
+				markLoadStarted(opts.model.id)
+
+				let announced: 'downloading' | 'loading' | null = null
+				const run = await runWhisper(
+					{ modelUrl: opts.model.ggmlUrl, pcm, lang: opts.lang },
+					{
+						onDownload(pct, cached) {
+							// A first download of half a gigabyte and a read from cache
+							// are very different waits; saying "downloading" for the
+							// second is how a user concludes the cache is not working.
+							const phase = cached ? 'loading_model' : 'downloading_model'
+							if (announced !== (cached ? 'loading' : 'downloading')) {
+								announced = cached ? 'loading' : 'downloading'
+								controller.enqueue({ type: 'status', phase })
+							}
+							controller.enqueue({ type: 'progress', progress: pct })
+						},
+						onReady() {
+							markLoadFinished()
+							controller.enqueue({ type: 'status', phase: 'transcribing' })
+						},
+						onProgress(pct) {
+							controller.enqueue({ type: 'progress', progress: pct })
+						},
+					},
+				)
+
+				for (const chunk of run.chunks) {
+					controller.enqueue({ type: 'segment', start: chunk.start, stop: chunk.stop, text: chunk.text, speaker: null })
+				}
+				finish({ type: 'done', text: run.text, processingTimeSec: run.elapsedSec })
+			} catch (err) {
+				resetWhisper()
+				finish({ type: 'error', code: 'local_engine', message: err instanceof Error ? err.message : String(err) })
+			}
+		},
+	})
+}
+
 export function transcribeLocally(opts: LocalRunOptions): ReadableStream<HandoffEvent> {
 	const id = nextId()
 
+	if (opts.model.runtime === 'whisper-cpp') return whisperStream(opts)
+
 	return new ReadableStream<HandoffEvent>({
 		async start(controller) {
-			const w = getWorker()
+			const w = getWorker(opts.model.runtime)
 			let settled = false
 
 			const finish = (event: HandoffEvent) => {
@@ -174,7 +261,6 @@ export function transcribeLocally(opts: LocalRunOptions): ReadableStream<Handoff
 						`${opts.model.label} cannot run on this browser's backend. Choose a smaller model in settings, or send this to your desktop.`,
 					)
 				}
-
 				const request: WorkerRequest = {
 					type: 'transcribe',
 					id,
