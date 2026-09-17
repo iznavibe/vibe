@@ -354,7 +354,7 @@ small/base Korean fine-tune to ONNX (optimum), quantising it to `q8` encoder +
 `q4` decoder, and hosting it (HF, not Pages). That is a real project and should
 only be started if generic Base proves inadequate on real Korean audio.
 
-## whisper.cpp WASM spike (2026-09-17) — promising, unfinished
+## whisper.cpp WASM spike (2026-09-17) — MEASURED, and turbo works
 
 Turbo is the model that is actually wanted, so the remaining path was tried:
 whisper.cpp compiled to WASM instead of ONNX Runtime. Different runtime, never
@@ -364,42 +364,59 @@ Spiked with `@fugood/whisper.node` (ships browser pthread wasm artifacts),
 served with `Cross-Origin-Opener-Policy: same-origin` and
 `Cross-Origin-Embedder-Policy: credentialless`, which wasm threads require.
 
-**Established, and encouraging:**
+### Results — desktop CPU, 8 threads, cached model
 
-- Cross-origin isolation works; `SharedArrayBuffer` available; `isWasmThreadsSupported()` true.
-- The runtime is **4 MB**, against ORT's 13–23 MB.
-- `ggml-large-v3-turbo-q5_0.bin` is **547 MB**, comparable to the ONNX turbo's 537 MB.
-- That model **loads into the runtime in 1.4 s** from cache. ORT could not create a
-  session in twenty minutes.
+| runtime | model | audio | inference | vs realtime |
+| --- | --- | --- | --- | --- |
+| **whisper.cpp wasm** | large-v3-turbo q5_0 | 30 s | **74.5 s** | **0.40x** |
+| whisper.cpp wasm | tiny | 10 s | 7.9 s | 1.27x |
+| whisper.cpp wasm (1 thread) | tiny | 10 s | 33.3 s | 0.30x |
+| ONNX Runtime | large-v3-turbo | 10 s | >20 min, abandoned | <0.01x |
 
-**Not established — the number that matters:** `transcribe()` fails immediately
-with `Error: Failed to fetch`, in the same second it is called. That is a wrapper
-integration problem, not a performance verdict, so **turbo's speed under
-whisper.cpp remains unmeasured**.
+**whisper.cpp runs turbo roughly 300x faster than ONNX Runtime does.** Model
+load from cache is 1.3 s, against ORT failing to create a session at all.
+Threads are worth ~4.2x, so cross-origin isolation is not optional.
 
-Gotchas found, worth not rediscovering:
+Extrapolating to an iPhone — fewer cores (≈2 performance + 4 efficiency) and
+lower per-core throughput than this 16-core desktop — expect roughly **2–4x
+slower again, so about 1.5–5 minutes of compute per minute of audio**. Usable
+for short memos, painful for long recordings. Note the benchmark used synthetic
+tone audio; real speech decodes more tokens and may run somewhat slower.
 
+### Wrapper gotchas — do not rediscover these
+
+- **`transcribe()` takes a URL, not samples.** It routes to `transcribeFile`,
+  which fetches its first argument — passing a Float32Array makes it try to
+  fetch `"0,0.0196,0.0391,…"` and fail with a bare `TypeError: Failed to fetch`
+  that looks like a network or COEP problem and is not. Use **`transcribeData()`**
+  for raw PCM. This cost most of the spike.
 - `initWhisper` resolves the model as `options.filePath || options.modelUrl`, so
-  the URL must go in `filePath`; passing it as `modelUrl` fetches a relative path
-  and 404s.
-- Model cache key is the source URL itself, in the cache named by
-  `modelCacheName`. Prefetching on the main thread and `cache.put(url, response)`
-  makes the package hit its cache — which is how the model got loaded at all,
-  since the package's own in-worker fetch stalled indefinitely under COEP.
-- `configureWasm` has no `wasmPaths` option (that was invented); the real keys are
-  `jsPath`, `wasmPath`, `workerUrl`, `locateFileBaseUrl`. Inspect
-  `WASM_CONFIG_PATHS` to see what it resolved. It expects the package's
-  `index.js` at its own root path, not renamed.
+  the URL must go in `filePath`.
+- The package's own in-worker fetch **stalls indefinitely on large models**.
+  Prefetch on the main thread with a streaming reader and `cache.put(url, response)`
+  into the cache named by `modelCacheName` — the cache key is the source URL
+  itself. 547 MB then downloads in ~60 s and `initWhisper` loads it in 1.3 s.
+- `configureWasm` has no `wasmPaths` option; the real keys are `jsPath`,
+  `wasmPath`, `workerUrl`, `locateFileBaseUrl`, `threads`, `worker`. Inspect
+  `WASM_CONFIG_PATHS` to see what it resolved. It expects the package's own
+  `index.js` at the served root, not renamed.
 - `configureWasm` throws if called after the runtime has loaded, so a failed
   attempt poisons the page — reload between tries.
+- With `worker: false` inference blocks the main thread, which freezes the tab
+  (and CDP evaluation) for the duration. Use the worker in the real app.
+- Loading a second model into a live runtime failed with
+  `RuntimeError: null function`; reload between models.
 
-To finish this, either debug the wrapper's transcribe path or build whisper.cpp
-to wasm directly with Emscripten and write a minimal binding. Then measure before
-building anything on top of it.
+### What shipping this means
 
-Temper expectations even if it works: whisper.cpp turbo on a phone CPU under
-wasm with threads is plausibly **2–6x slower than realtime** — a one-minute clip
-taking two to six minutes. Far better than ORT's >120x, nowhere near instant.
+Replace `worker.ts`'s transformers.js pipeline with whisper.cpp, keep the
+`HandoffEvent` stream contract so nothing above it changes, and add
+cross-origin isolation — which GitHub Pages cannot do with headers, so it needs
+a `coi-serviceworker` shim. Models become ggml `.bin` from
+`ggerganov/whisper.cpp` rather than ONNX from `onnx-community`.
+
+Worth noting this also puts the phone on the **same engine as the desktop**
+(ggml/whisper.cpp), which is a better architectural fit than the current split.
 
 ## The open question
 
