@@ -1,0 +1,136 @@
+<!doctype html>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Relay check</title>
+<style>
+	:root { color-scheme: light dark; }
+	body { font: 15px/1.5 -apple-system, system-ui, sans-serif; margin: 0; padding: 20px; max-width: 34rem; }
+	h1 { font-size: 1.1rem; margin: 0 0 0.25rem; }
+	p.lede { margin: 0 0 1.25rem; opacity: 0.7; font-size: 0.9rem; }
+	ol { padding-left: 1.2rem; margin: 0; }
+	li { margin-bottom: 1rem; }
+	.name { font-weight: 600; }
+	.state { font-variant-numeric: tabular-nums; }
+	.pass { color: #15803d; }
+	.fail { color: #b91c1c; }
+	.pending { opacity: 0.6; }
+	.detail { display: block; font-size: 0.82rem; opacity: 0.75; margin-top: 0.15rem; word-break: break-word; }
+	#verdict { margin-top: 1.5rem; padding: 0.9rem 1rem; border-radius: 0.75rem; background: color-mix(in srgb, currentColor 8%, transparent); font-size: 0.9rem; }
+</style>
+<body>
+	<h1>Can this phone reach the relay?</h1>
+	<p class="lede">
+		Handoff needs more than the relay's web page. It needs a WebSocket to it. This checks each step separately so the one that
+		fails is obvious.
+	</p>
+	<ol id="checks"></ol>
+	<div id="verdict" hidden></div>
+
+	<script>
+		const RELAY = 'aps1-1.relay.n0.iroh.link'
+		// The desktop this app pairs with, as published to iroh's DNS.
+		const NODE = 'mpkk9mio7h5qrcxq7zkqw8npgjqsgjj6hh48ckoapn5krqpe8kfo'
+
+		const list = document.getElementById('checks')
+		const verdict = document.getElementById('verdict')
+
+		function row(name) {
+			const li = document.createElement('li')
+			li.innerHTML = `<span class="name"></span> — <span class="state pending">checking…</span><span class="detail"></span>`
+			li.querySelector('.name').textContent = name
+			list.appendChild(li)
+			return {
+				ok(detail) {
+					const s = li.querySelector('.state')
+					s.textContent = 'works'
+					s.className = 'state pass'
+					li.querySelector('.detail').textContent = detail ?? ''
+				},
+				bad(detail) {
+					const s = li.querySelector('.state')
+					s.textContent = 'FAILED'
+					s.className = 'state fail'
+					li.querySelector('.detail').textContent = detail ?? ''
+				},
+			}
+		}
+
+		async function run() {
+			const results = {}
+
+			// 1. Plain HTTPS to the relay. This is the one that already passed by
+			//    loading the relay's landing page by hand.
+			const https = row('HTTPS to the relay')
+			try {
+				await fetch(`https://${RELAY}/`, { mode: 'no-cors', cache: 'no-store' })
+				https.ok(RELAY)
+				results.https = true
+			} catch (e) {
+				https.bad(String(e).slice(0, 120))
+				results.https = false
+			}
+
+			// 2. Discovery: turning the desktop's id into an address. Without this
+			//    the phone does not know which relay to dial.
+			const disco = row('Finding the desktop (pkarr)')
+			try {
+				const r = await fetch(`https://dns.iroh.link/pkarr/${NODE}`, { cache: 'no-store' })
+				if (r.ok) {
+					const buf = await r.arrayBuffer()
+					disco.ok(`published, ${buf.byteLength} bytes`)
+					results.discovery = true
+				} else {
+					disco.bad(`HTTP ${r.status} — the desktop may not be running`)
+					results.discovery = false
+				}
+			} catch (e) {
+				disco.bad(String(e).slice(0, 120))
+				results.discovery = false
+			}
+
+			// 3. The one that matters. A network can allow HTTPS and still refuse a
+			//    WebSocket upgrade, and this is the transport handoff actually uses.
+			const ws = row('WebSocket to the relay')
+			results.websocket = await new Promise((resolve) => {
+				let settled = false
+				const done = (ok, detail) => {
+					if (settled) return
+					settled = true
+					ok ? ws.ok(detail) : ws.bad(detail)
+					resolve(ok)
+				}
+				let sock
+				try {
+					sock = new WebSocket(`wss://${RELAY}/relay`, 'iroh-relay-v2')
+				} catch (e) {
+					done(false, String(e).slice(0, 120))
+					return
+				}
+				sock.onopen = () => {
+					done(true, 'upgrade accepted')
+					sock.close()
+				}
+				// A refused upgrade surfaces as a close or an error with no detail;
+				// either way it is a failure, and the distinction does not matter.
+				sock.onerror = () => done(false, 'the upgrade was refused or blocked')
+				sock.onclose = (e) => done(false, `closed before opening (code ${e.code})`)
+				setTimeout(() => done(false, 'timed out after 15s'), 15000)
+			})
+
+			verdict.hidden = false
+			if (results.https && results.discovery && results.websocket) {
+				verdict.textContent =
+					'All three work. The phone can reach everything handoff needs, so a failure to connect is something else — tell Claude this passed.'
+			} else if (!results.websocket && results.https) {
+				verdict.textContent =
+					'HTTPS works but the WebSocket does not. This network allows web pages through and blocks the connection handoff needs. Try a different network — cellular if you are on Wi-Fi, or the other way round.'
+			} else if (!results.discovery) {
+				verdict.textContent = 'The desktop could not be found. It is probably not running, or Vibe is closed.'
+			} else {
+				verdict.textContent = 'This phone cannot reach the relay at all. Check the connection, a VPN, or a content blocker.'
+			}
+		}
+
+		run()
+	</script>
+</body>
