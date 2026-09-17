@@ -17,6 +17,7 @@ import {
 	loadPeer,
 	normalizeEvent,
 	parsePairingHash,
+	parsePairingInput,
 	resolvePeer,
 	savePeer,
 	type Capabilities,
@@ -209,6 +210,23 @@ export function useHandoffSession() {
 		const onHashChange = () => adopt()
 		window.addEventListener('hashchange', onHashChange)
 		return () => window.removeEventListener('hashchange', onHashChange)
+	}, [])
+
+	/**
+	 * Pair from a link the user pasted.
+	 *
+	 * Same destination as arriving on the hash — save, persist, show — but
+	 * reached deliberately rather than by navigation, which is the only route
+	 * available inside an installed iOS web app. Returns false so the caller can
+	 * say why nothing happened.
+	 */
+	const pairFromLink = useCallback((input: string): boolean => {
+		const parsed = parsePairingInput(input)
+		if (!parsed) return false
+		savePeer(parsed)
+		setPeer(parsed)
+		void requestPersistentStorage()
+		return true
 	}, [])
 
 	/* ----------------------------------------------------- capabilities --- */
@@ -896,6 +914,7 @@ export function useHandoffSession() {
 		startRecording,
 		stopRecording,
 		importFile,
+		pairFromLink,
 		// Outbox
 		outbox,
 		persisted,

@@ -60,6 +60,7 @@ export function App() {
 		startRecording,
 		stopRecording,
 		importFile,
+		pairFromLink,
 		outbox,
 		persisted,
 		pumpOutbox,
@@ -119,7 +120,7 @@ export function App() {
 		and only a deliberate `device` choice skips them.
 	*/
 	if (!peer && engineChoice !== 'device') {
-		return <Shell>{<UnpairedNotice canRunLocally={localAvailable} onUseDevice={() => onEngineChange('device')} />}</Shell>
+		return <Shell>{<UnpairedNotice canRunLocally={localAvailable} onUseDevice={() => onEngineChange('device')} onPairFromLink={pairFromLink} />}</Shell>
 	}
 
 	const recording = phase === 'recording'
@@ -465,7 +466,23 @@ function Shell({ children, onSettings, badge }: { children: React.ReactNode; onS
 	)
 }
 
-function UnpairedNotice({ canRunLocally, onUseDevice }: { canRunLocally: boolean; onUseDevice: () => void }) {
+function UnpairedNotice({
+	canRunLocally,
+	onUseDevice,
+	onPairFromLink,
+}: {
+	canRunLocally: boolean
+	onUseDevice: () => void
+	onPairFromLink: (input: string) => boolean
+}) {
+	const [link, setLink] = useState('')
+	const [rejected, setRejected] = useState(false)
+
+	const submit = (e: React.FormEvent) => {
+		e.preventDefault()
+		if (!onPairFromLink(link)) setRejected(true)
+	}
+
 	return (
 		<div className="mt-10 space-y-4">
 			<Card className="stagger-in">
@@ -476,12 +493,53 @@ function UnpairedNotice({ canRunLocally, onUseDevice }: { canRunLocally: boolean
 					<div>
 						<h2 className="text-lg font-semibold">Not paired yet</h2>
 						<p className="mt-1 text-sm text-muted-foreground">
-							Scan the QR code in Vibe &rarr; Settings &rarr; Phone to link this device to your desktop.
-						</p>
-						<p className="mt-3 text-xs text-muted-foreground">
-							Paired before and seeing this? Scanning the QR code again is all it takes — it re-pairs in one step.
+							Open Vibe on your desktop &rarr; Settings &rarr; Phone, then paste the pairing link below.
 						</p>
 					</div>
+
+					{/*
+						A paste field, not a scanner.
+						
+						Scanning the QR with the camera opens Safari, and an installed
+						home screen app has its own storage — so a pairing made that way
+						never reaches the installed app, which is the one worth pairing.
+						iOS will not route a link into an installed web app either. So
+						the link has to arrive by hand, and this is the only route that
+						actually works on the platform this app is for.
+					*/}
+					<form className="w-full space-y-2 text-left" onSubmit={submit}>
+						<label htmlFor="pairing-link" className="eyebrow block">
+							Pairing link
+						</label>
+						<input
+							id="pairing-link"
+							value={link}
+							onChange={(e) => {
+								setLink(e.target.value)
+								setRejected(false)
+							}}
+							placeholder="https://…/#…"
+							autoCapitalize="none"
+							autoCorrect="off"
+							spellCheck={false}
+							inputMode="url"
+							className="h-12 w-full rounded-xl border border-border bg-background px-3 font-mono text-xs"
+						/>
+						{rejected && (
+							<p className="text-xs text-destructive">
+								That does not look like a pairing link. Copy the whole thing, including the part after #.
+							</p>
+						)}
+						<Button type="submit" className="h-12 w-full" disabled={!link.trim()}>
+							Pair this phone
+						</Button>
+					</form>
+
+					<p className="text-xs text-muted-foreground">
+						Scanning the QR opens Safari, which is a different app from this one — its pairing would not carry over. Send the link to yourself and
+						paste it here instead.
+					</p>
+
 					{canRunLocally ? (
 						<div className="w-full border-t pt-4">
 							<p className="text-sm text-muted-foreground">Or skip the desktop entirely and transcribe on this phone.</p>

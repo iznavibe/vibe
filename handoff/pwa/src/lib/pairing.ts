@@ -67,6 +67,36 @@ export function parsePairingHash(hash: string): Peer | null {
 	return { endpointId, token, invitationToken: token }
 }
 
+/**
+ * Parse a pairing link the user pasted in, rather than arrived on.
+ *
+ * Scanning the QR with the iPhone camera opens Safari, and an installed home
+ * screen app has its own storage — so a pairing made that way never reaches the
+ * installed app, which is the one that matters. There is no in-app scanner, and
+ * iOS will not route an arbitrary link into an installed web app. Pasting the
+ * link is therefore the only route that works on the platform this app is for.
+ *
+ * Accepts the whole URL or just the fragment, with or without the leading `#`,
+ * because what a person can paste depends on where they copied it from.
+ */
+export function parsePairingInput(input: string): Peer | null {
+	const trimmed = input.trim()
+	if (!trimmed) return null
+
+	// A full URL: take its fragment. Anything else falls through to being
+	// treated as the fragment itself.
+	try {
+		const url = new URL(trimmed)
+		if (url.hash) return parsePairingHash(url.hash)
+	} catch {
+		// Not a URL; fall through.
+	}
+
+	// A bare `<endpointId>:<token>`, or the tail of a link someone half-copied.
+	const fragment = trimmed.includes('#') ? trimmed.slice(trimmed.lastIndexOf('#') + 1) : trimmed
+	return parsePairingHash(fragment)
+}
+
 function samePairing(a: Peer, b: Peer): boolean {
 	return a.endpointId === b.endpointId && (a.token === b.token || (a.invitationToken ?? a.token) === (b.invitationToken ?? b.token))
 }

@@ -8,7 +8,7 @@
  */
 
 import { PairingError, resolvePeer, type Peer } from './pairing'
-export { PEER_KEY, loadPeer, savePeer, clearPeer, parsePairingHash, resolvePeer, type Peer } from './pairing'
+export { PEER_KEY, loadPeer, savePeer, clearPeer, parsePairingHash, parsePairingInput, resolvePeer, type Peer } from './pairing'
 export const LANG_KEY = 'vibe.handoff.lang'
 
 // Rebased on the deploy base: the app is served from a subpath on GitHub
