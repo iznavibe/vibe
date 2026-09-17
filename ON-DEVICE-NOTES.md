@@ -478,6 +478,60 @@ never recovers.
 - An empty `ErrorEvent` from a worker means the *script* failed to load. It never
   means the code inside threw. Three separate hours went into learning that once.
 
+## Handoff on iOS: root cause found (2026-09-18)
+
+**Peer-to-peer handoff cannot work from iOS Safari with this version of Vibe.**
+It is an upstream defect, not a misconfiguration, and not fixable from this
+repository without rebuilding the Rust wasm client.
+
+The desktop publishes its relay address to iroh's DNS as:
+
+```
+relay=https://aps1-1.relay.n0.iroh.link./
+                                      ^ trailing dot
+```
+
+The wasm client dials that string verbatim. TLS certificates do not carry a
+trailing dot; Safari refuses the handshake rather than stripping it, and the
+failure surfaces as `transport error / timed out`, which points at the network
+and is not a network problem at all.
+
+Proven on the phone with `public/relay-check.html`:
+
+| check | result |
+| --- | --- |
+| HTTPS to the relay | works |
+| pkarr discovery of the desktop | works |
+| `wss://aps1-1.relay.n0.iroh.link/relay` | **works** |
+| `wss://aps1-1.relay.n0.iroh.link./relay` | **refused — TLS name mismatch** |
+
+Everything else was verified healthy first, which is what made this so slow to
+find: desktop bound and publishing, holding an established connection to the
+relay on `5.223.65.62:443`, discovery resolving publicly with open CORS, and the
+live PWA pairing and reading capabilities successfully from Chrome on the same
+machine. Chrome was on the LAN and connected **directly**, never touching the
+relay — which is precisely the hop the phone cannot skip.
+
+`curl` strips the trailing dot, so this never reproduces from the desktop. Every
+hand-run test dialled the tidy name. The client dials the published one.
+
+### Why it cannot be fixed here
+
+- No env var sets a custom relay. Only `IROH_FORCE_STAGING_RELAYS` exists, and
+  the staging relays are published the same way.
+- The pkarr record is signed by the desktop's endpoint key, so it cannot be
+  rewritten in flight.
+- The trailing dot comes from iroh's default relay map, compiled into the
+  desktop (iroh 1.0.2) and consumed by the client (iroh-relay 1.0.3).
+
+Fixing it properly means patching the wasm client to normalise the hostname
+before dialling, then rebuilding `handoff/wasm` — which needs the Rust wasm
+toolchain upstream CI runs on Linux because `ring` compiles C for wasm32. Worth
+reporting upstream to `thewh1teagle/vibe` and probably to `n0-computer/iroh`.
+
+**Use the tunnel instead** (`handoff/bridge`). It reaches the same desktop, is
+faster than the p2p path would have been, and does not involve iroh at all.
+
 ## The open question
 
 **Is Base good enough for Korean?** Everything else hangs on this. The desktop
