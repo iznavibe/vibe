@@ -354,6 +354,53 @@ small/base Korean fine-tune to ONNX (optimum), quantising it to `q8` encoder +
 `q4` decoder, and hosting it (HF, not Pages). That is a real project and should
 only be started if generic Base proves inadequate on real Korean audio.
 
+## whisper.cpp WASM spike (2026-09-17) — promising, unfinished
+
+Turbo is the model that is actually wanted, so the remaining path was tried:
+whisper.cpp compiled to WASM instead of ONNX Runtime. Different runtime, never
+touches the JSEP bug, hand-written SIMD kernels that are far better on CPU.
+
+Spiked with `@fugood/whisper.node` (ships browser pthread wasm artifacts),
+served with `Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: credentialless`, which wasm threads require.
+
+**Established, and encouraging:**
+
+- Cross-origin isolation works; `SharedArrayBuffer` available; `isWasmThreadsSupported()` true.
+- The runtime is **4 MB**, against ORT's 13–23 MB.
+- `ggml-large-v3-turbo-q5_0.bin` is **547 MB**, comparable to the ONNX turbo's 537 MB.
+- That model **loads into the runtime in 1.4 s** from cache. ORT could not create a
+  session in twenty minutes.
+
+**Not established — the number that matters:** `transcribe()` fails immediately
+with `Error: Failed to fetch`, in the same second it is called. That is a wrapper
+integration problem, not a performance verdict, so **turbo's speed under
+whisper.cpp remains unmeasured**.
+
+Gotchas found, worth not rediscovering:
+
+- `initWhisper` resolves the model as `options.filePath || options.modelUrl`, so
+  the URL must go in `filePath`; passing it as `modelUrl` fetches a relative path
+  and 404s.
+- Model cache key is the source URL itself, in the cache named by
+  `modelCacheName`. Prefetching on the main thread and `cache.put(url, response)`
+  makes the package hit its cache — which is how the model got loaded at all,
+  since the package's own in-worker fetch stalled indefinitely under COEP.
+- `configureWasm` has no `wasmPaths` option (that was invented); the real keys are
+  `jsPath`, `wasmPath`, `workerUrl`, `locateFileBaseUrl`. Inspect
+  `WASM_CONFIG_PATHS` to see what it resolved. It expects the package's
+  `index.js` at its own root path, not renamed.
+- `configureWasm` throws if called after the runtime has loaded, so a failed
+  attempt poisons the page — reload between tries.
+
+To finish this, either debug the wrapper's transcribe path or build whisper.cpp
+to wasm directly with Emscripten and write a minimal binding. Then measure before
+building anything on top of it.
+
+Temper expectations even if it works: whisper.cpp turbo on a phone CPU under
+wasm with threads is plausibly **2–6x slower than realtime** — a one-minute clip
+taking two to six minutes. Far better than ORT's >120x, nowhere near instant.
+
 ## The open question
 
 **Is Base good enough for Korean?** Everything else hangs on this. The desktop
