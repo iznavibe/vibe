@@ -280,6 +280,80 @@ variant — offering it would cost ~724 MB to discover it cannot run.
 
 ---
 
+## How this is actually used (2026-09-17)
+
+The phone is used **outside**, away from the PC, and wants to work offline.
+
+That settles a design question that was open until now: **handoff is not the
+product here, on-device is.** Outside means the desktop may be asleep and the
+phone is on carrier NAT, which is exactly where iroh struggles — so pairing
+optimises for a case that will rarely be available. The engine should be set to
+**This phone**, not Automatic, so a run never waits on a desktop that is not
+there.
+
+It also means Base's Korean quality is not a fallback question. It is the whole
+product.
+
+### Pairing: diagnosed, not fixed
+
+Symptom: "failed to connect to desktop … timed out … transport error".
+
+The desktop is healthy — verified on 2026-09-17:
+
+- `vibe.exe` and `vibe-server.exe` running, `handoff.enabled = true`
+- endpoint bound and **persisted** in `%APPDATA%\…\handoff\endpoint.key`,
+  so the endpoint ID is stable across restarts
+- all three `relay.n0.iroh.link` relays reachable from the PC
+- Windows Firewall has inbound allow rules for `vibe.exe`, outbound unrestricted
+- `handoff.pairing.devices` is `[]` — **nothing has ever paired**
+- the desktop log records **no inbound connection attempt at all**
+
+So the phone never reached the desktop. Not worth chasing further given the
+use case above, but if it is ever wanted: try first on the **same Wi-Fi**, which
+lets iroh connect directly instead of hole-punching through carrier NAT.
+
+Note the pairing URL's origin has **nothing to do with connectivity** — the
+connection is p2p over iroh via n0's public relays, not any upstream server. The
+origin only decides which web app opens.
+
+### VIBE_PWA_ORIGIN is set
+
+`setx VIBE_PWA_ORIGIN "https://iznavibe.github.io/vibe"` (user scope), so the
+desktop's QR points at this fork rather than upstream. Takes effect for newly
+launched processes — Vibe must be fully quit, tray included. Undo with
+`setx VIBE_PWA_ORIGIN ""`.
+
+### What actually depends on upstream
+
+Less than it looks:
+
+| Thing | Source |
+| --- | --- |
+| QR default origin | thewh1teagle.github.io — overridden above |
+| Handoff wasm | upstream Pages, **build time only** (`pnpm wasm`) |
+| Models | **HuggingFace `onnx-community/*`** — never upstream |
+| p2p connection | iroh public relays (n0) — never upstream |
+
+Self-hosting the models on GitHub Pages is **not possible**: Pages enforces a
+hard **100 MB per file** limit and Base's decoder alone is 117.9 MB. GitHub
+Releases (2 GB/file) would work but buys nothing — HF's CDN is faster and the
+file is cached locally after the first fetch.
+
+### Korean-specific models: surveyed, none usable
+
+Searched HF on 2026-09-17 for a Korean fine-tune that would beat generic Base at
+Base's speed:
+
+- `onnx-community/whisper-large-v3-turbo-korean-ggml-ONNX` — ONNX exists, but it
+  is turbo-sized, so it inherits the CPU speed problem and is unusable here.
+- `jiwon65/whisper-small_korean-zeroth`, `TARARARAK/Whisper_base_Korean_finetunning`,
+  and the other small/base Korean fine-tunes — **PyTorch only, no ONNX**.
+
+So there is no ready-made fast Korean model. Getting one means exporting a
+small/base Korean fine-tune to ONNX (optimum), quantising it to `q8` encoder +
+`q4` decoder, and hosting it (HF, not Pages). That is a real project and should
+only be started if generic Base proves inadequate on real Korean audio.
+
 ## The open question
 
 **Is Base good enough for Korean?** Everything else hangs on this. The desktop
