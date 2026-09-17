@@ -73,6 +73,8 @@ export function App() {
 		localAvailable,
 		backend,
 		engineUsed,
+		serverConfig,
+		onServerConfigChange,
 		lang,
 		onLangChange,
 		copied,
@@ -119,8 +121,19 @@ export function App() {
 		unpaired phone is shown the QR instructions until it explicitly opts in,
 		and only a deliberate `device` choice skips them.
 	*/
-	if (!peer && engineChoice !== 'device') {
-		return <Shell>{<UnpairedNotice canRunLocally={localAvailable} onUseDevice={() => onEngineChange('device')} onPairFromLink={pairFromLink} />}</Shell>
+	if (!peer && engineChoice !== 'device' && engineChoice !== 'server') {
+		return (
+			<Shell>
+				{
+					<UnpairedNotice
+						canRunLocally={localAvailable}
+						onUseDevice={() => onEngineChange('device')}
+						onUseServer={() => onEngineChange('server')}
+						onPairFromLink={pairFromLink}
+					/>
+				}
+			</Shell>
+		)
 	}
 
 	const recording = phase === 'recording'
@@ -133,7 +146,10 @@ export function App() {
 	const needsExplicitLang = !!capabilities && !capabilities.languageDetection && !lang
 	// On-device needs none of the desktop's preconditions: the model is fetched
 	// on demand and Whisper detects the language for itself.
-	const engineReady = deviceMode ? localAvailable : modelLoaded && !needsExplicitLang
+	// The tunnel needs neither a pairing nor a loaded on-device model — only an
+	// address and a token, which settings validates on its own.
+	const serverMode = engineChoice === 'server'
+	const engineReady = serverMode ? true : deviceMode ? localAvailable : modelLoaded && !needsExplicitLang
 	const ready = recordable && engineReady
 	// Importing a file needs no microphone, so someone who declined the mic
 	// prompt — or is on a device without one — can still transcribe.
@@ -410,6 +426,8 @@ export function App() {
 				onLocalModelChange={onLocalModelChange}
 				localAvailable={localAvailable}
 				backend={backend}
+				serverConfig={serverConfig}
+				onServerConfigChange={onServerConfigChange}
 				onUnpair={unpair}
 				onClose={() => setSettingsOpen(false)}
 			/>
@@ -469,10 +487,12 @@ function Shell({ children, onSettings, badge }: { children: React.ReactNode; onS
 function UnpairedNotice({
 	canRunLocally,
 	onUseDevice,
+	onUseServer,
 	onPairFromLink,
 }: {
 	canRunLocally: boolean
 	onUseDevice: () => void
+	onUseServer: () => void
 	onPairFromLink: (input: string) => boolean
 }) {
 	const [link, setLink] = useState('')
@@ -539,6 +559,14 @@ function UnpairedNotice({
 						Scanning the QR opens Safari, which is a different app from this one — its pairing would not carry over. Send the link to yourself and
 						paste it here instead.
 					</p>
+
+					<div className="w-full border-t pt-4">
+						<p className="text-sm text-muted-foreground">Or reach your desktop over the internet instead of pairing.</p>
+						<Button variant="secondary" className="mt-3" onClick={onUseServer}>
+							Use my desktop over the internet
+						</Button>
+						<p className="mt-2 text-xs text-muted-foreground">Fastest and best quality. Needs the PC awake.</p>
+					</div>
 
 					{canRunLocally ? (
 						<div className="w-full border-t pt-4">

@@ -53,9 +53,7 @@ export function LanguagePicker({ capabilities, value, onChange }: Props) {
 		// already knows which languages this person uses, so ask it instead of
 		// inventing a list.
 		const deviceCodes = new Set(
-			(navigator.languages ?? [navigator.language])
-				.map((tag) => tag.split('-')[0]?.toLowerCase())
-				.filter((code): code is string => !!code)
+			(navigator.languages ?? [navigator.language]).map((tag) => tag.split('-')[0]?.toLowerCase()).filter((code): code is string => !!code),
 		)
 		const recentSet = new Set(recent)
 

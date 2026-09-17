@@ -128,12 +128,7 @@ export async function outboxCount(): Promise<number> {
  * would be exceeded and on `QuotaExceededError` — never resolves silently
  * without having written, because the caller's blob is the only other copy.
  */
-export async function addRecording(input: {
-	blob: Blob
-	filename: string
-	mime: string
-	lang: string | null
-}): Promise<OutboxSummary> {
+export async function addRecording(input: { blob: Blob; filename: string; mime: string; lang: string | null }): Promise<OutboxSummary> {
 	// Persistence is requested before the first write, not after, so the very
 	// first queued recording is already covered.
 	await requestPersistentStorage()
@@ -143,9 +138,7 @@ export async function addRecording(input: {
 	const totalBytes = existing.reduce((sum, entry) => sum + entry.size, 0)
 
 	if (existing.length >= MAX_ENTRIES) {
-		throw new OutboxFullError(
-			`The outbox already holds ${existing.length} unsent recordings. Send or delete one before recording again.`
-		)
+		throw new OutboxFullError(`The outbox already holds ${existing.length} unsent recordings. Send or delete one before recording again.`)
 	}
 	if (totalBytes + input.blob.size > MAX_TOTAL_BYTES) {
 		throw new OutboxFullError('The unsent recordings would exceed the storage limit. Send or delete one before recording again.')

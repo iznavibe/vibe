@@ -43,11 +43,7 @@ export function InstallHint({ variant }: Props) {
 						</Button>
 					)}
 				</div>
-				<button
-					type="button"
-					onClick={dismiss}
-					aria-label="Dismiss"
-					className="-m-2 shrink-0 cursor-pointer p-2 text-muted-foreground">
+				<button type="button" onClick={dismiss} aria-label="Dismiss" className="-m-2 shrink-0 cursor-pointer p-2 text-muted-foreground">
 					<X className="size-4" />
 				</button>
 			</div>

@@ -332,7 +332,7 @@ export function LanguageCombobox({
 				className={cn(
 					'rounded-2xl p-0',
 					prominent ? 'w-[240px]' : 'w-[var(--radix-popper-anchor-width)] min-w-[240px] max-w-[calc(100vw-24px)]',
-					contentClassName
+					contentClassName,
 				)}>
 				<div ref={listRef} className="max-h-[min(60dvh,var(--radix-popover-content-available-height))] overflow-y-auto overscroll-contain p-1.5">
 					{flat.length === 0 && <p className="px-3 py-8 text-center text-sm text-muted-foreground">{emptyLabel ?? 'No matches'}</p>}

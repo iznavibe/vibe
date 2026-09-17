@@ -52,12 +52,8 @@ export function OutboxCard({ entries, activeId, busy, persisted, onSendNow, onDe
 			<CardContent className="space-y-3 pt-6">
 				<div className="flex items-start justify-between gap-3">
 					<div>
-						<h2 className="text-base font-semibold">
-							{waiting === 1 ? '1 recording waiting to send' : `${waiting} recordings waiting to send`}
-						</h2>
-						<p className="mt-1 text-xs text-muted-foreground">
-							Saved on this phone. They stay here until your desktop confirms it has them.
-						</p>
+						<h2 className="text-base font-semibold">{waiting === 1 ? '1 recording waiting to send' : `${waiting} recordings waiting to send`}</h2>
+						<p className="mt-1 text-xs text-muted-foreground">Saved on this phone. They stay here until your desktop confirms it has them.</p>
 					</div>
 					{busy && <Spinner className="mt-1 size-4 shrink-0" />}
 				</div>
@@ -66,8 +62,8 @@ export function OutboxCard({ entries, activeId, busy, persisted, onSendNow, onDe
 					<div className="flex items-start gap-2 rounded-xl border border-destructive/40 bg-destructive/10 p-3">
 						<AlertTriangle className="mt-0.5 size-4 shrink-0 text-destructive" />
 						<p className="text-xs">
-							This browser has not granted permanent storage, so it may clear these recordings if space runs low. Add the app to
-							your home screen, or send them soon.
+							This browser has not granted permanent storage, so it may clear these recordings if space runs low. Add the app to your home screen,
+							or send them soon.
 						</p>
 					</div>
 				)}
@@ -87,12 +83,7 @@ export function OutboxCard({ entries, activeId, busy, persisted, onSendNow, onDe
 										{sending ? ' · sending…' : ''}
 									</p>
 								</div>
-								<Button
-									variant="ghost"
-									size="icon"
-									aria-label="Delete recording"
-									disabled={sending}
-									onClick={() => onDelete(entry.id)}>
+								<Button variant="ghost" size="icon" aria-label="Delete recording" disabled={sending} onClick={() => onDelete(entry.id)}>
 									<Trash2 />
 								</Button>
 							</li>

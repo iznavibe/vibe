@@ -6,15 +6,90 @@ import { LanguagePicker } from '~/components/language-picker'
 import { truncateId, type Capabilities } from '~/lib/handoff'
 import { LOCAL_MODELS, evictModel, isModelCached, modelsFor, variantFor, type EngineChoice, type LocalModel } from '~/lib/local/models'
 import type { Backend } from '~/lib/local/backend'
+import { pingServer, serverConfigured, type ServerConfig } from '~/lib/local/server-client'
 import { localCapabilities } from '~/lib/local/capabilities'
 import { formatSize } from '~/lib/recorder'
 import { cn } from '~/lib/style'
 
 const ENGINE_OPTIONS: { value: EngineChoice; label: string; hint: string }[] = [
-	{ value: 'auto', label: 'Automatic', hint: 'Use the desktop when it answers, this phone when it does not.' },
-	{ value: 'desktop', label: 'Desktop only', hint: 'Always wait for the desktop. Queued until it is reachable.' },
-	{ value: 'device', label: 'This phone', hint: 'Always transcribe here. Works with no desktop and no signal.' },
+	{ value: 'auto', label: 'Automatic', hint: 'Use the paired desktop when it answers, this phone when it does not.' },
+	{ value: 'server', label: 'My desktop (over the internet)', hint: 'Fastest and best quality. Needs the PC awake and the tunnel running.' },
+	{ value: 'desktop', label: 'Paired desktop (peer to peer)', hint: 'Direct connection. Queued until it is reachable.' },
+	{ value: 'device', label: 'This phone', hint: 'Works with no desktop and no signal. Much slower.' },
 ]
+
+/** Address and token for the bridge in front of the desktop's vibe-server. */
+function ServerSettings({ config, onChange }: { config: ServerConfig; onChange: (c: ServerConfig) => void }) {
+	const [url, setUrl] = useState(config.url)
+	const [token, setToken] = useState(config.token)
+	const [checking, setChecking] = useState(false)
+	const [result, setResult] = useState<string | null>(null)
+
+	const save = () => {
+		const next = { url: url.trim().replace(/\/+$/, ''), token: token.trim() }
+		onChange(next)
+		return next
+	}
+
+	const test = async () => {
+		const next = save()
+		if (!serverConfigured(next)) {
+			setResult('Fill in both fields first.')
+			return
+		}
+		setChecking(true)
+		setResult(null)
+		const outcome = await pingServer(next)
+		setChecking(false)
+		setResult(outcome.ok ? 'Reached your desktop.' : outcome.message)
+	}
+
+	return (
+		<div className="space-y-3 px-4 py-3">
+			<div className="space-y-1">
+				<label htmlFor="server-url" className="eyebrow block">
+					Address
+				</label>
+				<input
+					id="server-url"
+					value={url}
+					onChange={(e) => setUrl(e.target.value)}
+					onBlur={save}
+					placeholder="https://something.trycloudflare.com"
+					autoCapitalize="none"
+					autoCorrect="off"
+					spellCheck={false}
+					inputMode="url"
+					className="h-12 w-full rounded-xl border border-border bg-background px-3 font-mono text-xs"
+				/>
+			</div>
+			<div className="space-y-1">
+				<label htmlFor="server-token" className="eyebrow block">
+					Token
+				</label>
+				<input
+					id="server-token"
+					value={token}
+					onChange={(e) => setToken(e.target.value)}
+					onBlur={save}
+					type="password"
+					autoCapitalize="none"
+					autoCorrect="off"
+					spellCheck={false}
+					className="h-12 w-full rounded-xl border border-border bg-background px-3 font-mono text-xs"
+				/>
+			</div>
+			<Button variant="outline" className="h-11 w-full" onClick={() => void test()} disabled={checking}>
+				{checking ? 'Checking…' : 'Test connection'}
+			</Button>
+			{result && <p className="text-xs text-muted-foreground">{result}</p>}
+			<p className="text-xs text-muted-foreground">
+				Printed by <code className="font-mono">handoff/bridge</code> on your desktop. The token is what keeps the address from being useful to anyone
+				else.
+			</p>
+		</div>
+	)
+}
 
 /**
  * A model row, with whatever we can tell the user about what it will cost.
@@ -105,6 +180,8 @@ interface Props {
 	localAvailable: boolean
 	/** Which ORT backend this browser will use; decides the model list. */
 	backend: Backend
+	serverConfig: ServerConfig
+	onServerConfigChange: (config: ServerConfig) => void
 	onUnpair: () => void
 	onClose: () => void
 }
@@ -121,6 +198,8 @@ export function SettingsSheet({
 	onLocalModelChange,
 	localAvailable,
 	backend,
+	serverConfig,
+	onServerConfigChange,
 	onUnpair,
 	onClose,
 }: Props) {
@@ -196,7 +275,13 @@ export function SettingsSheet({
 						)}
 					</SettingsGroup>
 
-					{localAvailable && engineChoice !== 'desktop' && (
+					{engineChoice === 'server' && (
+						<SettingsGroup title="Your desktop">
+							<ServerSettings config={serverConfig} onChange={onServerConfigChange} />
+						</SettingsGroup>
+					)}
+
+					{localAvailable && engineChoice !== 'desktop' && engineChoice !== 'server' && (
 						<SettingsGroup title="On-device model">
 							{modelsFor(backend).map((model) => (
 								<ModelRow

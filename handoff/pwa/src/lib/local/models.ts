@@ -164,13 +164,20 @@ export function smallerThan(model: LocalModel, backend: 'webgpu' | 'wasm' = 'web
 export const MODEL_KEY = 'vibe.local.model'
 export const ENGINE_KEY = 'vibe.local.engine'
 
-/** Which engine the user last chose. `auto` prefers the desktop when it answers. */
-export type EngineChoice = 'auto' | 'desktop' | 'device'
+/**
+ * Which engine the user last chose.
+ *
+ * `desktop` is the paired peer-to-peer handoff; `server` is the same desktop
+ * reached over an HTTP tunnel instead, which works from anywhere without
+ * pairing and needs no iroh relay to hole-punch. `device` is on-device.
+ * `auto` prefers the desktop when there is one to ask.
+ */
+export type EngineChoice = 'auto' | 'desktop' | 'device' | 'server'
 
 export function loadEngineChoice(): EngineChoice {
 	try {
 		const raw = localStorage.getItem(ENGINE_KEY)
-		if (raw === 'auto' || raw === 'desktop' || raw === 'device') return raw
+		if (raw === 'auto' || raw === 'desktop' || raw === 'device' || raw === 'server') return raw
 	} catch {
 		// Storage can be unavailable in a locked-down browser; the default is fine.
 	}

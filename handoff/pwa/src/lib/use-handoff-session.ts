@@ -44,6 +44,7 @@ import { localEngineAvailable, transcribeLocally } from './local/engine'
 import { pickBackend, type Backend } from './local/backend'
 import { findModel, loadEngineChoice, loadModelId, saveEngineChoice, saveModelId, smallerThan, variantFor, type EngineChoice } from './local/models'
 import { rejectImport } from './local/import'
+import { loadServerConfig, saveServerConfig, serverConfigured, transcribeOnServer, type ServerConfig } from './local/server-client'
 
 export type Phase = 'idle' | 'recording' | 'sending' | 'done' | 'failed'
 
@@ -104,6 +105,8 @@ export function useHandoffSession() {
 	// quantisation, so the UI needs it, not just the engine.
 	const [backend, setBackend] = useState<Backend>('wasm')
 	const [engineUsed, setEngineUsed] = useState<EngineUsed | null>(null)
+	// Where the desktop lives when it is reached over a tunnel rather than p2p.
+	const [serverConfig, setServerConfig] = useState<ServerConfig>(() => loadServerConfig())
 	// Durable queue of recordings that the desktop has not confirmed yet.
 	const [outbox, setOutbox] = useState<OutboxSummary[]>([])
 	const [persisted, setPersisted] = useState(true)
@@ -128,6 +131,7 @@ export function useHandoffSession() {
 	// retried by draining the outbox, but a transient import has no entry to
 	// drain — without this, its retry button would do nothing at all.
 	const lastSourceRef = useRef<RunSource | null>(null)
+	const serverConfigRef = useRef<ServerConfig>(serverConfig)
 	const engineChoiceRef = useRef<EngineChoice>(engineChoice)
 	const localModelIdRef = useRef(localModelId)
 	const localAvailableRef = useRef(false)
@@ -144,6 +148,7 @@ export function useHandoffSession() {
 
 	// Refs mirror the engine state so `send` can read the current choice without
 	// being rebuilt (and re-registering its effects) every time it changes.
+	serverConfigRef.current = serverConfig
 	engineChoiceRef.current = engineChoice
 	localModelIdRef.current = localModelId
 	localAvailableRef.current = localAvailable
@@ -332,7 +337,15 @@ export function useHandoffSession() {
 			 */
 			const choice = engineChoiceRef.current
 			const canDevice = localAvailableRef.current
-			const useDevice = choice === 'device' || (choice === 'auto' && !currentPeer && canDevice)
+			const server = serverConfigRef.current
+			const useServer = choice === 'server' && serverConfigured(server)
+			const useDevice = !useServer && (choice === 'device' || (choice === 'auto' && !currentPeer && canDevice))
+
+			if (choice === 'server' && !useServer) {
+				setFailure({ code: 'not_configured', message: 'Add your desktop’s address and token in settings first.' })
+				setPhase('failed')
+				return
+			}
 
 			if (useDevice && !canDevice) {
 				setFailure({
@@ -342,7 +355,7 @@ export function useHandoffSession() {
 				setPhase('failed')
 				return
 			}
-			if (!useDevice && !currentPeer) return
+			if (!useDevice && !useServer && !currentPeer) return
 
 			// A queued run may find its entry already gone — drained by another
 			// tab, or discarded while it waited. That is not a failure.
@@ -374,7 +387,9 @@ export function useHandoffSession() {
 
 			// Refuse an upload the desktop is going to reject on arrival — no point
 			// burning cellular data on it. A missing or zero cap means "unknown".
-			const cap = useDevice ? 0 : maxBytesRef.current
+			// Only the p2p handoff has a size cap to respect; the tunnel and the
+			// device are both bounded by other things.
+			const cap = useDevice || useServer ? 0 : maxBytesRef.current
 			if (cap > 0 && blob.size > cap) {
 				release()
 				setFailure({
@@ -412,7 +427,12 @@ export function useHandoffSession() {
 				 * desktop or in a worker on this phone.
 				 */
 				let stream: ReadableStream
-				if (useDevice) {
+				if (useServer) {
+					setEngineUsed('desktop')
+					setUploadPct(0)
+					setStatus('Sending to your desktop…')
+					stream = transcribeOnServer({ blob, filename, lang: wireLang, config: server })
+				} else if (useDevice) {
 					const model = findModel(localModelIdRef.current)
 					if (!model) throw new Error('No on-device model is selected.')
 					setEngineUsed('device')
@@ -866,6 +886,11 @@ export function useHandoffSession() {
 		}
 	}, [])
 
+	const onServerConfigChange = useCallback((config: ServerConfig) => {
+		setServerConfig(config)
+		saveServerConfig(config)
+	}, [])
+
 	const onEngineChange = useCallback((choice: EngineChoice) => {
 		setEngineChoice(choice)
 		saveEngineChoice(choice)
@@ -929,6 +954,8 @@ export function useHandoffSession() {
 		localAvailable,
 		backend,
 		engineUsed,
+		serverConfig,
+		onServerConfigChange,
 		// Language
 		lang,
 		onLangChange,
