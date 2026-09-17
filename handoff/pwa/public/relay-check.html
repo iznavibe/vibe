@@ -117,10 +117,44 @@
 				setTimeout(() => done(false, 'timed out after 15s'), 15000)
 			})
 
+			// 4. The same WebSocket, to the hostname exactly as the desktop
+			//    publishes it — with a trailing dot. TLS certificates do not carry
+			//    the trailing dot, and browsers disagree about whether to strip it
+			//    before matching. If this fails while check 3 passes, that is the
+			//    whole bug: every hand-run test dials the tidy name, and the real
+			//    client dials the published one.
+			const dotted = row('WebSocket to the published name (trailing dot)')
+			results.dotted = await new Promise((resolve) => {
+				let settled = false
+				const done = (ok, detail) => {
+					if (settled) return
+					settled = true
+					ok ? dotted.ok(detail) : dotted.bad(detail)
+					resolve(ok)
+				}
+				let sock
+				try {
+					sock = new WebSocket(`wss://${RELAY}./relay`, 'iroh-relay-v2')
+				} catch (e) {
+					done(false, String(e).slice(0, 120))
+					return
+				}
+				sock.onopen = () => {
+					done(true, 'accepted with the trailing dot too')
+					sock.close()
+				}
+				sock.onerror = () => done(false, 'refused — likely the TLS name mismatch')
+				sock.onclose = (e) => done(false, `closed before opening (code ${e.code})`)
+				setTimeout(() => done(false, 'timed out after 15s'), 15000)
+			})
+
 			verdict.hidden = false
-			if (results.https && results.discovery && results.websocket) {
+			if (results.websocket && !results.dotted) {
 				verdict.textContent =
-					'All three work. The phone can reach everything handoff needs, so a failure to connect is something else — tell Claude this passed.'
+					'Found it. The plain hostname works and the published one — with the trailing dot — does not. That is the name the real client dials, so this is why handoff times out. Tell Claude check 4 failed.'
+			} else if (results.https && results.discovery && results.websocket && results.dotted) {
+				verdict.textContent =
+					'All four work. The phone can reach everything handoff needs, so the failure is something narrower — tell Claude all four passed.'
 			} else if (!results.websocket && results.https) {
 				verdict.textContent =
 					'HTTPS works but the WebSocket does not. This network allows web pages through and blocks the connection handoff needs. Try a different network — cellular if you are on Wi-Fi, or the other way round.'
