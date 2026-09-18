@@ -44,7 +44,7 @@ import { localEngineAvailable, transcribeLocally } from './local/engine'
 import { pickBackend, type Backend } from './local/backend'
 import { findModel, loadEngineChoice, loadModelId, saveEngineChoice, saveModelId, smallerThan, variantFor, type EngineChoice } from './local/models'
 import { rejectImport } from './local/import'
-import { loadServerConfig, saveServerConfig, serverConfigured, transcribeOnServer, type ServerConfig } from './local/server-client'
+import { loadServerConfig, resolveServerUrl, saveServerConfig, serverConfigured, transcribeOnServer, type ServerConfig } from './local/server-client'
 
 export type Phase = 'idle' | 'recording' | 'sending' | 'done' | 'failed'
 
@@ -320,6 +320,18 @@ export function useHandoffSession() {
 		}
 	}, [])
 
+	/**
+	 * Remember a new address for the desktop.
+	 *
+	 * Declared above `run` on purpose: `run` calls it when discovery resolves a
+	 * different address, and a `const` referenced before its initialiser is a
+	 * trap worth not leaving lying around.
+	 */
+	const onServerConfigChange = useCallback((config: ServerConfig) => {
+		setServerConfig(config)
+		saveServerConfig(config)
+	}, [])
+
 	const run = useCallback(
 		async (source: RunSource) => {
 			if (sendingRef.current) return
@@ -430,8 +442,19 @@ export function useHandoffSession() {
 				if (useServer) {
 					setEngineUsed('desktop')
 					setUploadPct(0)
+					// Resolve the address first when discovery is configured: a quick
+					// tunnel gets a new hostname on every desktop restart, and this is
+					// what stops that stranding a phone that is nowhere near the PC.
+					setStatus(server.discovery ? 'Finding your desktop…' : 'Sending to your desktop…')
+					const resolved = await resolveServerUrl(server)
+					if (!resolved) throw new Error('Could not work out your desktop’s address. Check the discovery URL in settings.')
+					if (resolved !== server.url) {
+						// Remember it, so the next run starts from the right place even
+						// if discovery is briefly unavailable.
+						onServerConfigChange({ ...server, url: resolved })
+					}
 					setStatus('Sending to your desktop…')
-					stream = transcribeOnServer({ blob, filename, lang: wireLang, config: server })
+					stream = transcribeOnServer({ blob, filename, lang: wireLang, config: { ...server, url: resolved } })
 				} else if (useDevice) {
 					const model = findModel(localModelIdRef.current)
 					if (!model) throw new Error('No on-device model is selected.')
@@ -884,11 +907,6 @@ export function useHandoffSession() {
 		} catch {
 			/* private mode */
 		}
-	}, [])
-
-	const onServerConfigChange = useCallback((config: ServerConfig) => {
-		setServerConfig(config)
-		saveServerConfig(config)
 	}, [])
 
 	const onEngineChange = useCallback((choice: EngineChoice) => {

@@ -6,7 +6,7 @@ import { LanguagePicker } from '~/components/language-picker'
 import { truncateId, type Capabilities } from '~/lib/handoff'
 import { LOCAL_MODELS, evictModel, isModelCached, modelsFor, variantFor, type EngineChoice, type LocalModel } from '~/lib/local/models'
 import type { Backend } from '~/lib/local/backend'
-import { pingServer, serverConfigured, type ServerConfig } from '~/lib/local/server-client'
+import { pingServer, resolveServerUrl, serverConfigured, type ServerConfig } from '~/lib/local/server-client'
 import { localCapabilities } from '~/lib/local/capabilities'
 import { formatSize } from '~/lib/recorder'
 import { cn } from '~/lib/style'
@@ -20,13 +20,18 @@ const ENGINE_OPTIONS: { value: EngineChoice; label: string; hint: string }[] = [
 
 /** Address and token for the bridge in front of the desktop's vibe-server. */
 function ServerSettings({ config, onChange }: { config: ServerConfig; onChange: (c: ServerConfig) => void }) {
+	const [discovery, setDiscovery] = useState(config.discovery)
 	const [url, setUrl] = useState(config.url)
 	const [token, setToken] = useState(config.token)
 	const [checking, setChecking] = useState(false)
 	const [result, setResult] = useState<string | null>(null)
 
 	const save = () => {
-		const next = { url: url.trim().replace(/\/+$/, ''), token: token.trim() }
+		const next = {
+			url: url.trim().replace(/\/+$/, ''),
+			token: token.trim(),
+			discovery: discovery.trim(),
+		}
 		onChange(next)
 		return next
 	}
@@ -40,6 +45,15 @@ function ServerSettings({ config, onChange }: { config: ServerConfig; onChange: 
 		setChecking(true)
 		setResult(null)
 		const outcome = await pingServer(next)
+		if (next.discovery) {
+			// Show what discovery actually resolved to, so a stale or wrong
+			// gist is visible rather than just "could not reach".
+			const found = await resolveServerUrl(next)
+			if (found && found !== next.url) {
+				setUrl(found)
+				onChange({ ...next, url: found })
+			}
+		}
 		setChecking(false)
 		setResult(outcome.ok ? 'Reached your desktop.' : outcome.message)
 	}
@@ -47,8 +61,28 @@ function ServerSettings({ config, onChange }: { config: ServerConfig; onChange: 
 	return (
 		<div className="space-y-3 px-4 py-3">
 			<div className="space-y-1">
+				<label htmlFor="server-discovery" className="eyebrow block">
+					Discovery URL
+				</label>
+				<input
+					id="server-discovery"
+					value={discovery}
+					onChange={(e) => setDiscovery(e.target.value)}
+					onBlur={save}
+					placeholder="https://api.github.com/gists/…"
+					autoCapitalize="none"
+					autoCorrect="off"
+					spellCheck={false}
+					inputMode="url"
+					className="h-12 w-full rounded-xl border border-border bg-background px-3 font-mono text-xs"
+				/>
+				<p className="text-xs text-muted-foreground">
+					Set this once and the address below keeps itself current, even after the desktop reboots onto a new tunnel.
+				</p>
+			</div>
+			<div className="space-y-1">
 				<label htmlFor="server-url" className="eyebrow block">
-					Address
+					Address {discovery ? '(found automatically)' : ''}
 				</label>
 				<input
 					id="server-url"
