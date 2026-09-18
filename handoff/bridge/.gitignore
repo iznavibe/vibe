@@ -1,4 +1,10 @@
 # Generated on first run and printed once. Not a secret to share, but not
 # something to commit either.
 token.txt
-bridge.log
+
+# Runtime artifacts: process logs, the address currently published, and which
+# gist it is published to. All machine-specific.
+*.log
+*.log.err
+vibe-tunnel.json
+remote-state.json
